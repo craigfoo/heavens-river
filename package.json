@@ -1,0 +1,24 @@
+{
+  "name": "heavens-river-explorer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A browser-based real-time explorer of the Heaven's River topopolis (fan project, non-commercial).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lil-gui": "^0.21.0",
+    "postprocessing": "^6.39.5",
+    "simplex-noise": "^4.0.3",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}

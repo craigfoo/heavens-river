@@ -1,0 +1,17 @@
+:root {
+  --ink: #f4ead8;
+  --ink-dim: rgba(244, 234, 216, 0.72);
+  --panel: rgba(18, 16, 22, 0.62);
+  --panel-strong: rgba(14, 12, 18, 0.86);
+  --accent: #e8b460;
+  --accent-2: #7fc4c0;
+  --line: rgba(244, 234, 216, 0.18);
+  --serif: 'Cormorant Garamond', Georgia, serif;
+  --sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0e18; color: var(--ink); font-family: var(--sans); }
+#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+#ui { position: fixed; inset: 0; pointer-events: none; }
+#ui .interactive, #ui button, #ui input, #ui select, #ui a { pointer-events: auto; }
+.hidden { display: none !important; }

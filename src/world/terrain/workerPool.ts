@@ -1,0 +1,117 @@
+// A small pool of terrain workers sharing one priority queue.
+
+import type { ChunkRequest, ChunkResult, FarShellResult, WorkerRequest, WorkerResult } from './chunkTypes';
+
+interface Slot {
+  worker: Worker;
+  busy: boolean;
+  ready: boolean;
+  job: string | null;
+}
+
+export class TerrainWorkerPool {
+  private slots: Slot[] = [];
+  private queue: ChunkRequest[] = [];
+  private queued = new Set<string>();
+  private inflight = new Set<string>();
+  onChunk: (r: ChunkResult) => void = () => {};
+  onFarShell: (r: FarShellResult) => void = () => {};
+  private epoch = 0;
+  private slotEpoch = new Map<Slot, number>();
+  generated = 0;
+  totalGenMs = 0;
+
+  constructor(count: number) {
+    for (let i = 0; i < count; i++) {
+      const worker = new Worker(new URL('./terrainWorker.ts', import.meta.url), { type: 'module' });
+      const slot: Slot = { worker, busy: false, ready: false, job: null };
+      worker.onmessage = (e: MessageEvent<WorkerResult>) => this.handle(slot, e.data);
+      worker.onerror = (e) => console.error('terrain worker error', e.message);
+      this.slots.push(slot);
+    }
+  }
+
+  get size() {
+    return this.slots.length;
+  }
+
+  /** (Re)initialise every worker for a section; drops all pending work. */
+  init(section: number, seed: number) {
+    this.epoch++;
+    this.queue.length = 0;
+    this.queued.clear();
+    this.inflight.clear();
+    for (const s of this.slots) {
+      s.ready = false;
+      s.busy = true;
+      s.job = null;
+      this.slotEpoch.set(s, this.epoch);
+      s.worker.postMessage({ type: 'init', section, seed } satisfies WorkerRequest);
+    }
+  }
+
+  private handle(slot: Slot, msg: WorkerResult) {
+    slot.busy = false;
+    const job = slot.job;
+    slot.job = null;
+    if (msg.type === 'ready') {
+      slot.ready = this.slotEpoch.get(slot) === this.epoch;
+    } else if (msg.type === 'chunk') {
+      if (job) this.inflight.delete(job);
+      this.generated++;
+      this.totalGenMs += msg.genMs;
+      if (this.slotEpoch.get(slot) === this.epoch) this.onChunk(msg);
+    } else if (msg.type === 'farshell') {
+      if (this.slotEpoch.get(slot) === this.epoch) this.onFarShell(msg);
+    }
+    this.pump();
+  }
+
+  /** Replace the pending queue (already sorted by priority). */
+  setQueue(reqs: ChunkRequest[]) {
+    this.queue = reqs.filter((r) => !this.inflight.has(r.key));
+    this.queued = new Set(this.queue.map((r) => r.key));
+    this.pump();
+  }
+
+  isPending(key: string) {
+    return this.queued.has(key) || this.inflight.has(key);
+  }
+
+  requestFarShell(ns: number, nz: number) {
+    const epoch = this.epoch;
+    const trySend = () => {
+      if (epoch !== this.epoch) return;
+      const slot = this.slots.find((s) => s.ready && !s.busy);
+      if (!slot) {
+        setTimeout(trySend, 30);
+        return;
+      }
+      slot.busy = true;
+      slot.job = '__farshell';
+      slot.worker.postMessage({ type: 'farshell', ns, nz } satisfies WorkerRequest);
+    };
+    trySend();
+  }
+
+  pump() {
+    for (const slot of this.slots) {
+      if (!slot.ready || slot.busy) continue;
+      const req = this.queue.shift();
+      if (!req) return;
+      this.queued.delete(req.key);
+      this.inflight.add(req.key);
+      slot.busy = true;
+      slot.job = req.key;
+      slot.worker.postMessage(req satisfies WorkerRequest);
+    }
+  }
+
+  get pending() {
+    return this.queue.length + this.inflight.size;
+  }
+
+  get allReady() {
+    return this.slots.every((s) => s.ready);
+  }
+}
