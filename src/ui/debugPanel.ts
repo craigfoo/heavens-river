@@ -49,6 +49,7 @@ export class DebugPanel {
     world.add(holo, 'km', 2, 60, 0.5).name('hologram height km').onChange((v: number) => (U.uHoloR.value = R - v * 1000));
     world.add(U.uFogScale, 'value', 0, 4, 0.05).name('haze');
     world.add(app.lighting, 'liberty').name('golden light zone');
+    world.add(app.bulkheads, 'visible').name('x-ray barrier bulkheads');
 
     const render = gui.addFolder('Rendering');
     render.add(app.pipeline.bloom, 'intensity', 0, 3, 0.01).name('bloom');

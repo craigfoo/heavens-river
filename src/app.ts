@@ -17,6 +17,7 @@ import { GrassField } from './world/vegetation/grass';
 import { TownManager } from './towns/townManager';
 import { Portals } from './world/portals';
 import { Hatch } from './world/hatch';
+import { Bulkheads } from './world/bulkhead';
 import { TownLife } from './npc/townLife';
 import { PlayerAvatar } from './npc/avatar';
 import { SurveillanceBirds } from './npc/birds';
@@ -39,6 +40,7 @@ export class App {
   towns: TownManager;
   readonly portals = new Portals();
   readonly hatch = new Hatch();
+  readonly bulkheads = new Bulkheads(U.uTime);
   readonly life: TownLife;
   readonly avatar = new PlayerAvatar();
   readonly birds: SurveillanceBirds;
@@ -107,6 +109,7 @@ export class App {
     this.scene.add(this.portals.group);
     this.hatch.build(this.gen);
     this.scene.add(this.hatch.group);
+    this.scene.add(this.bulkheads.group);
     this.scene.add(this.sky.mesh);
     this.scene.add(this.lighting.sun, this.lighting.target, this.lighting.hemi);
     this.debugText = document.createElement('div');
@@ -264,6 +267,7 @@ export class App {
     this.avatar.update(simDt, this.player);
     this.birds.update(simDt, cam, this.player);
     this.hatch.update(dt, this.player.s, this.player.z);
+    this.bulkheads.update();
     this.sky.update(Z_MIN - frame.originZ, Z_MAX - frame.originZ);
     if (render) {
       if (this.renderOverride) this.renderOverride(dt);

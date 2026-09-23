@@ -59,33 +59,60 @@ vec3 cropColor(float h) {
   if (h < 0.18) return vec3(0.62, 0.50, 0.20);      // ripe wheat
   if (h < 0.32) return vec3(0.44, 0.52, 0.16);      // young barley
   if (h < 0.44) return vec3(0.40, 0.30, 0.18);      // ploughed earth
-  if (h < 0.55) return vec3(0.52, 0.44, 0.30);      // stubble
-  if (h < 0.64) return vec3(0.46, 0.36, 0.52);      // flowering crop
+  if (h < 0.56) return vec3(0.52, 0.44, 0.30);      // stubble
+  if (h < 0.61) return vec3(0.50, 0.42, 0.50);      // flowering crop
   if (h < 0.78) return vec3(0.30, 0.46, 0.14);      // green crop
   if (h < 0.88) return vec3(0.70, 0.58, 0.22);      // golden crop
   return vec3(0.36, 0.40, 0.18);                    // pasture
 }
 
+// Fields are laid out per farm region (jittered ~1.1 km Voronoi cells): each
+// region has its own orientation and plot size, some are long strip fields,
+// and hedges run along both plot and region boundaries.
 vec3 fields(vec2 wb, float dist, vec3 base) {
-  vec2 cs = vec2(118.0, 164.0);
-  vec2 c = floor(wb / cs);
-  vec2 f = fract(wb / cs);
-  // jitter internal boundaries a little per row of fields
-  float hh = tHash(c + 17.0);
-  float h = tHash(c);
+  const float RC = 1100.0;
+  vec2 rc = floor(wb / RC);
+  float d1 = 1e12;
+  float d2 = 1e12;
+  vec2 rid = rc;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 cc = rc + vec2(float(i), float(j));
+      vec2 p = (cc + 0.15 + 0.7 * vec2(tHash(cc + 1.3), tHash(cc + 4.7))) * RC;
+      float d = dot(wb - p, wb - p);
+      if (d < d1) {
+        d2 = d1;
+        d1 = d;
+        rid = cc;
+      } else if (d < d2) d2 = d;
+    }
+  }
+  float regionEdge = (sqrt(d2) - sqrt(d1)) * 0.5;
+  float ra = (tHash(rid + 7.0) - 0.5) * 1.3;
+  vec2 cs = vec2(mix(70.0, 170.0, tHash(rid + 11.0)), mix(110.0, 260.0, tHash(rid + 13.0)));
+  if (tHash(rid + 19.0) > 0.72) cs.x *= 0.32; // strip fields
+  float ca = cos(ra);
+  float sa = sin(ra);
+  vec2 q = vec2(ca * wb.x - sa * wb.y, sa * wb.x + ca * wb.y) + rid * 37.0;
+  vec2 c = floor(q / cs);
+  vec2 f = fract(q / cs);
+  float hh = tHash(c + rid * 3.1 + 17.0);
+  float h = tHash(c + rid * 5.3);
   vec3 crop = pow(cropColor(h), vec3(1.6)) * 1.25;
   crop *= 0.9 + 0.2 * tNoise(wb * 0.05);
-  float along = hh > 0.5 ? wb.x : wb.y;
+  float along = hh > 0.5 ? q.x : q.y;
   float rowC = along / 0.95;
   float aa = fwidth(rowC);
   float rows = 0.5 + 0.5 * sin(rowC * 6.2831853);
   float rowFade = (1.0 - smoothstep(30.0, 160.0, dist)) * (1.0 - smoothstep(0.25, 0.6, aa));
-  float furrow = (h < 0.5 || (h > 0.55 && h < 0.88)) ? 0.35 : 0.12;
+  float furrow = (h < 0.5 || (h > 0.56 && h < 0.88)) ? 0.35 : 0.12;
   crop *= 1.0 - furrow * rows * rowFade;
   vec2 edge = min(f, 1.0 - f) * cs;
-  float border = 1.0 - smoothstep(0.6, 2.2 + dist * 0.004, min(edge.x, edge.y));
+  float bw = 2.2 + dist * 0.004;
+  float border = (1.0 - smoothstep(0.6, bw, min(edge.x, edge.y))) * step(0.35, hh);
+  border = max(border, 1.0 - smoothstep(1.0, bw + 1.5, regionEdge));
   vec3 hedge = vec3(0.10, 0.16, 0.05) * (0.8 + 0.4 * tNoise(wb * 0.7));
-  crop = mix(crop, hedge, border * step(0.35, hh));
+  crop = mix(crop, hedge, border);
   return crop;
 }
 
