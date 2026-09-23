@@ -32,9 +32,10 @@ main.ts ─ App (renderer, world streaming, frame loop)
 
 - `world/gen/world.ts` (`WorldGen`) is the deterministic generator for one section. It is pure TypeScript with no DOM or three.js, so the same code runs in the workers and on the main thread. Terrain is built "valley first": four main rivers with sine-generated meanders and calm reaches (`gen/rivers.ts`), flood plains, valley walls and hills, tributaries and streams carved in, towns flattened, and the barrier ring near each section end.
 - The **hero hill** and **maintenance hatch**: a hand-shaped hill beside the first river city, with the arrival hatch cut into its city-facing flank (`WorldGen.heroHill`, `WorldGen.hatch`, `world/hatch.ts`).
-- `world/terrain/` is a quadtree over the unrolled section (16 × 27 root tiles, 64 × 64 quads per chunk, down to ~1.1 m spacing), built by `terrainWorker.ts` through a priority queue in `workerPool.ts`. Chunks carry skirts, colours, material weights, a water grid and tree instances. A low-resolution far shell covers the rest of the cylinder.
+- `world/terrain/` is a quadtree over the unrolled section (16 × 27 root tiles, 64 × 64 quads per chunk, down to ~1.1 m spacing), built by `terrainWorker.ts` through a priority queue in `workerPool.ts` (one-off jobs such as the far shell and the map image go ahead of chunks). Chunks carry skirts, colours, material weights, a water grid and tree instances. A low-resolution far shell covers the rest of the cylinder; its shader draws the main rivers from a small data texture of their centrelines, so they show as silver threads on the far side in Bob mode.
+- Farmland is painted in the terrain shader per farm region (jittered Voronoi cells with their own field orientation and size, strip fields and hedgerows), and a towpath runs along both banks of every main river.
 - `worldQuery.ts` answers gameplay questions on the main thread (ground height matching the rendered triangles, water level and flow), plus colliders and walkable floors from towns.
-- Water is a separate mesh per chunk with a flow-map shader (`world/water/waterMaterial.ts`): Fresnel reflection of the hologram, depth-based colour, shore foam, sun glints, and Snell's window from below.
+- Water is a separate mesh per chunk with a flow-map shader (`world/water/waterMaterial.ts`): Fresnel reflection of the hologram, depth-based colour, shore foam, sun glints, and Snell's window from below. Under the surface, `world/underwater.ts` adds drifting motes and schools of silver fish.
 
 ## Towns and life
 
@@ -59,6 +60,8 @@ main.ts ─ App (renderer, world streaming, frame loop)
 - **Not canon, invented here:** the Quinlan's exact look, town and river names, the numbering, the look of Anek's birds, the maintenance hatch and all mural subjects.
 
 ## Testing
+
+The F3 panel (`ui/debugPanel.ts`) tunes time, haze, LOD and vision live, jumps between towns and sections, and can x-ray the structural bulkheads inside the barrier rings (`world/bulkhead.ts`, spec 4.3).
 
 There is no unit-test suite. Development used headless Chromium (Playwright with SwiftShader) driving `?test` mode: step the simulation, wait for the workers, render, and compare screenshots. `npm run build` type-checks the whole project. The model and intro have standalone preview pages at `/src/npc/preview.html` and `/src/intro/preview.html` in the dev server.
 
