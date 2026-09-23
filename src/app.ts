@@ -141,6 +141,8 @@ export class App {
     this.grass.setDensity(q === 'low' ? 0.35 : q === 'medium' ? 0.65 : 1);
     this.pipeline.vision.setResolutionScale(q === 'low' ? 0.5 : q === 'medium' ? 0.6 : 0.75);
     const pr = Math.min(window.devicePixelRatio, q === 'high' && !mobile ? 2 : q === 'medium' ? 1.5 : 1);
+    this.maxPixelRatio = pr;
+    this.pixelRatio = pr;
     if (!this.testMode) {
       this.pipeline.renderer.setPixelRatio(pr);
       this.resize();
@@ -184,10 +186,48 @@ export class App {
 
   tick() {
     const now = performance.now();
-    const dt = Math.min((now - this.last) / 1000, 0.1);
+    const raw = now - this.last;
+    const dt = Math.min(raw / 1000, 0.1);
     this.last = now;
     this.step(dt);
+    this.adaptResolution(raw);
     requestAnimationFrame(() => this.tick());
+  }
+
+  // ---- adaptive resolution: trade pixels for frame rate on slower GPUs
+  adaptiveRes = true;
+  private maxPixelRatio = 1;
+  private pixelRatio = 1;
+  private frameAcc = 0;
+  private frameN = 0;
+  private fastWindows = 0;
+
+  private adaptResolution(ms: number) {
+    if (!this.adaptiveRes || this.testMode || this.renderOverride || this.simFrozen || document.hidden) return;
+    if (ms > 250) return; // tab switches and hitches
+    this.frameAcc += ms;
+    this.frameN++;
+    if (this.frameAcc < 1500) return;
+    const avg = this.frameAcc / this.frameN;
+    this.frameAcc = 0;
+    this.frameN = 0;
+    const minPr = Math.max(0.6, this.maxPixelRatio * 0.5);
+    let pr = this.pixelRatio;
+    if (avg > 24 && pr > minPr) {
+      pr = Math.max(minPr, pr * 0.85);
+      this.fastWindows = 0;
+    } else if (avg < 17.6 && pr < this.maxPixelRatio) {
+      // only climb back after sustained headroom, to avoid oscillating
+      if (++this.fastWindows >= 3) {
+        pr = Math.min(this.maxPixelRatio, pr * 1.12);
+        this.fastWindows = 0;
+      }
+    } else this.fastWindows = 0;
+    if (Math.abs(pr - this.pixelRatio) > 0.01) {
+      this.pixelRatio = pr;
+      this.pipeline.renderer.setPixelRatio(pr);
+      this.resize();
+    }
   }
 
   /** Advance the simulation by dt and render one frame. */

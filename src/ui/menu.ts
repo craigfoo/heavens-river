@@ -12,6 +12,7 @@ const GROUPS: { title: string; opts: Opt[] }[] = [
     title: 'Graphics',
     opts: [
       { kind: 'select', key: 'quality', label: 'Quality', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']] },
+      { kind: 'toggle', key: 'adaptiveRes', label: 'Adaptive resolution', hint: 'Renders fewer pixels when the frame rate drops, and more when there is headroom.' },
       { kind: 'range', key: 'fov', label: 'Field of view', min: 60, max: 140, step: 1, fmt: (v) => `${v}°` },
       { kind: 'toggle', key: 'grass', label: 'Grass' },
       { kind: 'toggle', key: 'shadows', label: 'Shadows' },

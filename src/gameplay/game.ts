@@ -549,6 +549,10 @@ export class Game {
       case 'quality':
         app.setQuality(s.quality);
         break;
+      case 'adaptiveRes':
+        app.adaptiveRes = s.adaptiveRes;
+        if (!s.adaptiveRes) app.setQuality(s.quality);
+        break;
       case 'volume':
       case 'muted':
         this.audio.setVolume(s.volume, s.muted);

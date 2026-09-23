@@ -2,6 +2,7 @@
 
 export interface Settings {
   quality: 'low' | 'medium' | 'high';
+  adaptiveRes: boolean; // lower the resolution automatically when frames run slow
   fov: number; // horizontal degrees, 100 default, up to 140
   sensitivity: number;
   invertY: boolean;
@@ -24,6 +25,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   quality: 'high',
+  adaptiveRes: true,
   fov: 100,
   sensitivity: 1,
   invertY: false,
