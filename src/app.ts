@@ -18,6 +18,7 @@ import { TownManager } from './towns/townManager';
 import { Portals } from './world/portals';
 import { Hatch } from './world/hatch';
 import { Bulkheads } from './world/bulkhead';
+import { UnderwaterLife } from './world/underwater';
 import { TownLife } from './npc/townLife';
 import { PlayerAvatar } from './npc/avatar';
 import { SurveillanceBirds } from './npc/birds';
@@ -41,6 +42,7 @@ export class App {
   readonly portals = new Portals();
   readonly hatch = new Hatch();
   readonly bulkheads = new Bulkheads(U.uTime);
+  readonly underwater = new UnderwaterLife();
   readonly life: TownLife;
   readonly avatar = new PlayerAvatar();
   readonly birds: SurveillanceBirds;
@@ -111,6 +113,7 @@ export class App {
     this.hatch.build(this.gen);
     this.scene.add(this.hatch.group);
     this.scene.add(this.bulkheads.group);
+    this.scene.add(this.underwater.group);
     this.scene.add(this.sky.mesh);
     this.scene.add(this.lighting.sun, this.lighting.target, this.lighting.hemi);
     this.debugText = document.createElement('div');
@@ -255,6 +258,11 @@ export class App {
     U.uUnderwater.value = under ? 1 : 0;
     U.uWaterY.value = under ? frame.toRender(cam.s, cam.z, wl, _v).y : -1e9;
     this.pipeline.grading.u('underwater').value = under ? 1 : 0;
+    if (under) {
+      const floorY = frame.toRender(cam.s, cam.z, this.world.groundHeight(cam.s, cam.z), _v2).y;
+      const flow = this.cameraOverride ? 0 : 1;
+      this.underwater.update(simDt, this.camera.position, true, floorY, U.uWaterY.value, this.player.flowS * flow, this.player.flowZ * flow);
+    } else this.underwater.update(simDt, this.camera.position, false, 0, 0, 0, 0);
     this.pipeline.grading.u('time').value = this.elapsed;
     this.pipeline.grading.u('exposure').value = this.lighting.state.exposure;
     // god rays: strongest with a low golden sun, gone at night and underwater
@@ -304,3 +312,4 @@ export class App {
 }
 
 const _v = new Vector3();
+const _v2 = new Vector3();
