@@ -7,9 +7,7 @@ import {
   BufferGeometry,
   Float32BufferAttribute,
   LessEqualDepth,
-  Matrix4,
   Mesh,
-  PerspectiveCamera,
   ShaderMaterial,
   Vector2,
 } from 'three';
@@ -17,13 +15,14 @@ import { atmosphereParsGlsl } from '../render/atmosphereGlsl';
 import { U } from '../render/uniforms';
 
 const vertex = /* glsl */ `
-uniform mat4 uCamWorld;
 varying vec3 vDir;
 void main() {
   // ray from the projection scale factors (unprojecting the far plane is
   // numerically unstable with a 0.05 m .. 4000 km depth range)
   vec3 view = vec3(position.x / projectionMatrix[0][0], position.y / projectionMatrix[1][1], -1.0);
-  vDir = mat3(uCamWorld) * view;
+  // camera-to-world rotation from the view matrix (works for any camera
+  // rendering the scene, e.g. the Quinlan-vision sub-views)
+  vDir = transpose(mat3(viewMatrix)) * view;
   gl_Position = vec4(position.xy, 0.999999, 1.0);
 }
 `;
@@ -93,7 +92,6 @@ export class SkyBackground {
       fragmentShader: fragment,
       uniforms: {
         ...U,
-        uCamWorld: { value: new Matrix4() },
         uZRange: { value: new Vector2(-1e7, 1e7) },
         uFarLand: { value: U.uHemiGround.value.clone().multiplyScalar(0.8) },
       },
@@ -106,8 +104,7 @@ export class SkyBackground {
     this.mesh.renderOrder = 1_000_000;
   }
 
-  update(camera: PerspectiveCamera, zMinRender: number, zMaxRender: number) {
-    this.material.uniforms.uCamWorld.value.copy(camera.matrixWorld);
+  update(zMinRender: number, zMaxRender: number) {
     this.material.uniforms.uZRange.value.set(zMinRender, zMaxRender);
   }
 }

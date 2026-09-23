@@ -83,6 +83,8 @@ export interface RegionCtx {
 }
 
 const GRID = 8000; // tributary lookup grid cell (m)
+/** Ground level of the barrier foothills shared by neighbouring sections. */
+const BOUNDARY_BASE = 160;
 
 export class WorldGen {
   readonly section: number;
@@ -276,21 +278,30 @@ export class WorldGen {
 
   /** Height of the hill field (no valleys), including ridges and barriers. */
   hillField(s: number, z: number, minWl: number, out?: TerrainSample): number {
-    const [a, b, t] = this.bracket(s);
-    const zc = clamp(z, a.zStart, a.zEnd);
-    const zc2 = clamp(z, b.zStart, b.zEnd);
-    const ref = lerp(a.levelAt(zc), b.levelAt(zc2), smoothstep(0.2, 0.8, t)) + 24;
-    const ws = s + this.warp.sample(s, z, 4000) * 2600;
-    const wz = z + this.warp.sample(s + 51_000, z - 33_000, 4000) * 2600;
-    const A = lerp(70, 820, smoothstep(-0.45, 0.6, this.amp.sample(s, z)));
-    const hn = this.hills.sample(ws, wz, minWl);
-    const shape = Math.pow(clamp(0.52 + 0.62 * hn, 0, 1.2), 1.35);
-    let e = ref + A * shape;
-    const rm = smoothstep(0.18, 0.5, this.ridgeMask.sample(s, z));
+    // Near a section end everything section-specific fades out so the barrier
+    // crest (keyed only by the boundary) is identical from both sides.
+    const u = Math.min(Math.abs(z), Math.abs(L - z));
+    const own = smoothstep(3000, 26_000, u);
+    let e = BOUNDARY_BASE;
     let ridge = 0;
-    if (rm > 0) {
-      ridge = rm * this.ridges.ridged(ws, wz, minWl);
-      e += ridge * 2900;
+    if (own > 0) {
+      const [a, b, t] = this.bracket(s);
+      const zc = clamp(z, a.zStart, a.zEnd);
+      const zc2 = clamp(z, b.zStart, b.zEnd);
+      const ref = lerp(a.levelAt(zc), b.levelAt(zc2), smoothstep(0.2, 0.8, t)) + 24;
+      const ws = s + this.warp.sample(s, z, 4000) * 2600;
+      const wz = z + this.warp.sample(s + 51_000, z - 33_000, 4000) * 2600;
+      const A = lerp(70, 820, smoothstep(-0.45, 0.6, this.amp.sample(s, z)));
+      const hn = this.hills.sample(ws, wz, minWl);
+      const shape = Math.pow(clamp(0.52 + 0.62 * hn, 0, 1.2), 1.35);
+      let es = ref + A * shape;
+      const rm = smoothstep(0.18, 0.5, this.ridgeMask.sample(s, z));
+      if (rm > 0) {
+        ridge = rm * this.ridges.ridged(ws, wz, minWl);
+        es += ridge * 2900;
+      }
+      e = lerp(BOUNDARY_BASE, es, own);
+      ridge *= own;
     }
     e += this.barrier(s, z, minWl);
     if (out) out.ridge = ridge;

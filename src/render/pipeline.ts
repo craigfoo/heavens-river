@@ -24,6 +24,7 @@ import {
   WebGLRenderer,
   PCFSoftShadowMap,
 } from 'three';
+import { VisionPass } from './vision';
 
 const gradingFrag = /* glsl */ `
 uniform float exposure;
@@ -88,6 +89,7 @@ export class Pipeline {
   readonly bloom: BloomEffect;
   readonly dof: DepthOfFieldEffect;
   readonly renderPass: RenderPass;
+  readonly vision: VisionPass;
   private effectPass: EffectPass;
   private dofPass: EffectPass;
   private smaaPass: EffectPass | null = null;
@@ -118,6 +120,9 @@ export class Pipeline {
     });
     this.renderPass = new RenderPass(scene, camera);
     this.composer.addPass(this.renderPass);
+    this.vision = new VisionPass(scene, camera, opts.msaa);
+    this.vision.enabled = false;
+    this.composer.addPass(this.vision);
     this.bloom = new BloomEffect({
       mipmapBlur: true,
       luminanceThreshold: 1.1,
@@ -142,6 +147,18 @@ export class Pipeline {
 
   setDof(on: boolean) {
     this.dofPass.enabled = on;
+  }
+
+  /** Quinlan vision: replaces the normal scene render with a multi-view composite. */
+  setVision(mode: 'off' | 'panorama' | 'split') {
+    const on = mode !== 'off';
+    this.renderPass.enabled = !on;
+    this.vision.enabled = on;
+    if (on) this.vision.setMode(mode);
+  }
+
+  get visionMode(): 'off' | 'panorama' | 'split' {
+    return this.vision.enabled ? this.vision.mode : 'off';
   }
 
   resize(w: number, h: number) {

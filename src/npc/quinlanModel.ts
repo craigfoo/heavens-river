@@ -29,7 +29,11 @@
 // Shader injection (see quinlanAnimParsGlsl / quinlanAnimGlsl below):
 //   vertex pars after  #include <common>      -> quinlanAnimParsGlsl
 //   statements after   #include <begin_vertex> -> quinlanAnimGlsl
-//   The host declares `uniform float uTime;` (seconds).
+//   The host declares `uniform float uTime;` (seconds; float32, so wrap it every
+//   hour or so to keep the cycles smooth). Needs `vertexColors: true` for the
+//   colours; instanceColor (see quinlanFurPalette) tints the fur only.
+//   Fractional gaits cross-fade between adjacent indices only (idle-walk-run-swim
+//   make sense; switch other pairs directly).
 
 import {
   Box3,
@@ -80,16 +84,18 @@ type V3 = [number, number, number];
 export const QUINLAN_JOINTS = {
   hip: [0, 0.3, 0] as V3, // root / whole-body pitch pivot
   spine: [0, 0.5, 0] as V3, // upper-body bend pivot
-  neck: [0, 0.905, 0.02] as V3,
-  jaw: [0, 0.957, -0.03] as V3,
-  shoulderL: [-0.172, 0.772, 0] as V3,
-  shoulderR: [0.172, 0.772, 0] as V3,
+  neck: [0, 0.9, 0.02] as V3,
+  jaw: [0, 0.955, -0.035] as V3,
+  shoulderL: [-0.18, 0.772, 0] as V3,
+  shoulderR: [0.18, 0.772, 0] as V3,
+  elbowL: [-0.314, 0.592, -0.018] as V3, // derived from rest height in the shader (no attribute)
+  elbowR: [0.314, 0.592, -0.018] as V3,
   hipL: [-0.112, 0.295, 0] as V3,
   hipR: [0.112, 0.295, 0] as V3,
   tail: [0, 0.25, 0.14] as V3,
 };
-const EYE_R: V3 = [0.126, 1.074, -0.045];
-const EYE_RADIUS = 0.046;
+const EYE_R: V3 = [0.138, 1.07, -0.035];
+const EYE_RADIUS = 0.05;
 
 // ---------------------------------------------------------------------------
 // Palette (sRGB hex -> linear working space via three's colour management)
@@ -105,15 +111,15 @@ const PAL = {
   furDark: lin(0x573722),
   belly: lin(0xdcbc90),
   muzzle: lin(0xcfab80),
-  beak: lin(0x8d6446),
+  beak: lin(0x664b3a),
   nose: lin(0x2a1b15),
   mouth: lin(0x5a2226),
   tongue: lin(0xb5585a),
   teeth: lin(0xf3ecd9),
   eye: lin(0x140e0b),
   shine: lin(0xffffff),
-  web: lin(0xa98068),
-  paw: lin(0x4b3326),
+  web: lin(0xae8570),
+  paw: lin(0x533829),
   tail: lin(0x55423a),
   tailDark: lin(0x3c2e27),
   earIn: lin(0xa27463),
@@ -125,6 +131,12 @@ const PAL = {
 /** Clothing accent dyes (madder, woad, weld, green, terracotta, purple, teal, oat). */
 const ACCENTS_SRGB = [0xb4452c, 0x2f5f92, 0xcf9a2c, 0x3f7c4a, 0xc2683a, 0x6d4a7e, 0x2c8a86, 0xdccfae];
 
+/** Same hash as GLSL qH(v, k): decorrelated 0..1 values from one variant number. */
+export function quinlanVariantHash(variant: number, channel: number): number {
+  const x = Math.sin(variant * 78.233 + channel * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 /**
  * Per-instance fur tint for InstancedMesh.setColorAt(). The Quinlan shader applies
  * instanceColor to fur only (eyes, teeth and clothes keep their colours), so this is
@@ -133,16 +145,15 @@ const ACCENTS_SRGB = [0xb4452c, 0x2f5f92, 0xcf9a2c, 0x3f7c4a, 0xc2683a, 0x6d4a7e
 export function quinlanFurPalette(variant: number, target = new Color()): Color {
   const tones: V3[] = [
     [1.0, 1.0, 1.0], // chestnut (base)
-    [0.72, 0.66, 0.62], // chocolate
-    [1.28, 1.1, 0.82], // golden
-    [0.92, 0.93, 0.96], // ash brown
-    [1.16, 0.88, 0.72], // russet
-    [1.38, 1.26, 1.04], // sandy
-    [0.55, 0.5, 0.48], // near black
-    [1.1, 1.02, 0.92], // tawny
+    [0.58, 0.52, 0.5], // chocolate
+    [1.5, 1.28, 0.82], // golden
+    [0.9, 0.98, 1.12], // ash brown
+    [1.34, 0.86, 0.64], // russet
+    [1.7, 1.55, 1.2], // sandy
+    [0.42, 0.38, 0.37], // near black
+    [1.22, 1.08, 0.88], // tawny
   ];
-  const v = (((variant * 7.919 + 0.137) % 1) + 1) % 1;
-  const f = v * tones.length;
+  const f = quinlanVariantHash(variant, 0) * tones.length;
   const i = Math.floor(f);
   const a = tones[i % tones.length];
   const b = tones[(i + 1) % tones.length];
@@ -281,6 +292,20 @@ function octa(c: V3, r: V3, rot: V3 = [0, 0, 0]): Prim {
   return { p, t, uv: p.map(() => [0, 0] as UV) };
 }
 
+/** Box with half extents r, rotated by euler `rot` (flat-shaded use). */
+function box(c: V3, r: V3, rot: V3 = [0, 0, 0]): Prim {
+  const R = euler(rot);
+  const p: V3[] = [];
+  for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) p.push(add(c, R([x * r[0], y * r[1], z * r[2]])));
+  const t: number[] = [];
+  const quads = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
+  for (const q of quads) {
+    tri(t, p, q[0], q[1], q[2], c);
+    tri(t, p, q[0], q[2], q[3], c);
+  }
+  return { p, t, uv: p.map(() => [0, 0] as UV) };
+}
+
 /** Three-sided tooth: base around `base` (perpendicular to dir), apex along dir. */
 function tooth(base: V3, dir: V3, length: number, radius: number): Prim {
   const d = norm(dir);
@@ -352,7 +377,7 @@ interface Spec {
   pivot: V3;
   paint: (p: V3, n: V3, uv: UV) => Paint;
   weight?: (p: V3, uv: UV) => number;
-  tag?: number;
+  tag?: number | ((uv: UV) => number);
   flat?: boolean;
 }
 
@@ -374,7 +399,8 @@ class Builder {
     this.col.push(c[0], c[1], c[2]);
     this.part.push(s.part);
     this.piv.push(s.pivot[0], s.pivot[1], s.pivot[2]);
-    this.skin.push(s.weight ? clamp01(s.weight(p, uv)) : 1, c[3], s.tag ?? 0);
+    const tag = typeof s.tag === 'function' ? s.tag(uv) : (s.tag ?? 0);
+    this.skin.push(s.weight ? clamp01(s.weight(p, uv)) : 1, c[3], tag);
   }
 
   add(pr: Prim, s: Spec) {
@@ -427,89 +453,91 @@ const TORSO: number[][] = [
   [0.645, 0.01, 0.21, 0.152, 0.176],
   [0.73, 0.015, 0.188, 0.14, 0.156],
   [0.805, 0.02, 0.16, 0.126, 0.136],
-  [0.865, 0.022, 0.122, 0.106, 0.112],
-  [0.92, 0.022, 0.094, 0.09, 0.09],
+  [0.865, 0.022, 0.13, 0.112, 0.118],
+  [0.92, 0.022, 0.108, 0.1, 0.102],
   [0.965, 0.022, 0, 0, 0],
 ];
 const TORSO_LOW = [0, 1, 3, 5, 7, 9, 11, 12];
 
 // Head rings (perpendicular to Z, snout towards -Z): [z, cy, rx, ryTop, ryBottom]
 const HEAD: number[][] = [
-  [0.165, 1.04, 0, 0, 0],
-  [0.15, 1.04, 0.07, 0.07, 0.065],
-  [0.12, 1.042, 0.118, 0.112, 0.1],
-  [0.075, 1.045, 0.145, 0.132, 0.12],
-  [0.02, 1.045, 0.152, 0.138, 0.125],
-  [-0.035, 1.04, 0.145, 0.13, 0.115],
-  [-0.085, 1.025, 0.125, 0.11, 0.085],
-  [-0.135, 1.0, 0.098, 0.082, 0.05],
-  [-0.185, 0.985, 0.078, 0.06, 0.035],
-  [-0.235, 0.975, 0.064, 0.048, 0.028],
-  [-0.28, 0.968, 0.052, 0.04, 0.024],
-  [-0.312, 0.962, 0.036, 0.028, 0.018],
-  [-0.328, 0.958, 0, 0, 0],
+  [0.17, 1.035, 0, 0, 0],
+  [0.155, 1.035, 0.075, 0.075, 0.07],
+  [0.125, 1.038, 0.128, 0.122, 0.11],
+  [0.078, 1.04, 0.158, 0.143, 0.128],
+  [0.02, 1.04, 0.166, 0.148, 0.132],
+  [-0.04, 1.034, 0.158, 0.138, 0.118],
+  [-0.085, 1.02, 0.14, 0.115, 0.075], // brow "stop" and mouth corners
+  [-0.115, 1.0, 0.122, 0.09, 0.055],
+  [-0.15, 0.99, 0.106, 0.078, 0.05],
+  [-0.184, 0.984, 0.093, 0.071, 0.048],
+  [-0.211, 0.98, 0.079, 0.063, 0.044],
+  [-0.228, 0.978, 0.061, 0.047, 0.038],
+  [-0.238, 0.975, 0.039, 0.025, 0.025],
+  [-0.243, 0.975, 0, 0, 0],
 ];
-const HEAD_LOW = [0, 2, 4, 6, 7, 9, 11, 12];
+const HEAD_LOW = [0, 2, 4, 6, 8, 10, 12, 13];
 
 // Lower jaw rings: [z, cy, rx, ryTop, ryBottom]
 const JAW: number[][] = [
-  [-0.02, 0.95, 0, 0, 0],
-  [-0.04, 0.947, 0.08, 0.012, 0.036],
-  [-0.095, 0.944, 0.078, 0.011, 0.038],
-  [-0.15, 0.941, 0.068, 0.01, 0.032],
-  [-0.205, 0.939, 0.056, 0.009, 0.026],
-  [-0.25, 0.938, 0.042, 0.007, 0.019],
-  [-0.272, 0.938, 0, 0, 0],
+  [-0.035, 0.955, 0, 0, 0],
+  [-0.055, 0.95, 0.092, 0.03, 0.045],
+  [-0.1, 0.94, 0.088, 0.028, 0.048],
+  [-0.14, 0.934, 0.078, 0.026, 0.043],
+  [-0.178, 0.93, 0.065, 0.024, 0.036],
+  [-0.205, 0.93, 0.048, 0.02, 0.027],
+  [-0.222, 0.932, 0, 0, 0],
 ];
 const JAW_LOW = [0, 1, 3, 5, 6];
 
 // Right arm path: [x, y, z, a (front-back), b (lateral)]; mirrored for the left.
 const ARM: number[][] = [
-  [0.165, 0.83, 0.004, 0, 0],
-  [0.18, 0.8, 0.002, 0.05, 0.05],
-  [0.205, 0.76, 0, 0.066, 0.064],
-  [0.252, 0.672, -0.008, 0.062, 0.06],
-  [0.294, 0.585, -0.018, 0.056, 0.054],
-  [0.326, 0.502, -0.03, 0.05, 0.048],
-  [0.345, 0.445, -0.04, 0.044, 0.042],
-  [0.354, 0.408, -0.046, 0.052, 0.03],
-  [0.36, 0.37, -0.05, 0.055, 0.028],
-  [0.362, 0.34, -0.052, 0.04, 0.022],
-  [0.362, 0.322, -0.052, 0, 0],
+  [0.168, 0.822, 0.004, 0, 0],
+  [0.186, 0.795, 0.002, 0.056, 0.056],
+  [0.214, 0.752, 0, 0.07, 0.068],
+  [0.265, 0.672, -0.008, 0.065, 0.062],
+  [0.314, 0.592, -0.018, 0.058, 0.056],
+  [0.352, 0.514, -0.03, 0.052, 0.05],
+  [0.378, 0.458, -0.04, 0.046, 0.044],
+  [0.391, 0.421, -0.046, 0.056, 0.032],
+  [0.4, 0.382, -0.05, 0.06, 0.03],
+  [0.405, 0.35, -0.052, 0.044, 0.024],
+  [0.407, 0.332, -0.052, 0, 0],
 ];
-const ARM_LOW = [0, 2, 4, 6, 8, 10];
+const ARM_LOW = [0, 2, 4, 7, 10];
 const ARM_WRIST = 6;
 
 // Right leg path: [x, y, z, r]
 const LEG: number[][] = [
-  [0.108, 0.335, 0, 0],
-  [0.112, 0.305, 0, 0.062],
-  [0.116, 0.262, -0.002, 0.08],
-  [0.121, 0.19, -0.006, 0.078],
-  [0.125, 0.125, -0.01, 0.064],
-  [0.128, 0.078, -0.012, 0.052],
-  [0.129, 0.05, -0.012, 0],
+  [0.106, 0.335, 0, 0],
+  [0.11, 0.305, 0, 0.068],
+  [0.115, 0.262, -0.002, 0.088],
+  [0.12, 0.19, -0.006, 0.086],
+  [0.124, 0.125, -0.01, 0.072],
+  [0.127, 0.078, -0.012, 0.058],
+  [0.128, 0.048, -0.012, 0],
 ];
 const LEG_LOW = [0, 2, 4, 6];
-const FOOT_C: V3 = [0.134, 0.029, -0.052];
-const FOOT_R: V3 = [0.064, 0.029, 0.108];
+const FOOT_C: V3 = [0.136, 0.03, -0.055];
+// local radii: x width, y length (rotated onto -Z/+Z), z height (rotated onto Y)
+const FOOT_R: V3 = [0.066, 0.112, 0.03];
 const FOOT_YAW = -0.18; // toes turned slightly outwards
 
 // Tail path: [y, z, halfWidth, top, bottom]
 const TAIL: number[][] = [
   [0.265, 0.095, 0, 0, 0],
-  [0.262, 0.118, 0.07, 0.064, 0.064],
-  [0.225, 0.2, 0.082, 0.052, 0.052],
-  [0.16, 0.29, 0.1, 0.038, 0.036],
-  [0.09, 0.385, 0.128, 0.03, 0.027],
-  [0.055, 0.475, 0.148, 0.027, 0.024],
-  [0.045, 0.57, 0.156, 0.026, 0.023],
-  [0.043, 0.66, 0.146, 0.024, 0.021],
-  [0.042, 0.735, 0.112, 0.02, 0.018],
-  [0.041, 0.785, 0.06, 0.013, 0.012],
-  [0.041, 0.805, 0, 0, 0],
+  [0.262, 0.118, 0.072, 0.064, 0.064],
+  [0.228, 0.195, 0.09, 0.054, 0.052],
+  [0.165, 0.28, 0.118, 0.04, 0.037],
+  [0.098, 0.37, 0.145, 0.031, 0.028],
+  [0.06, 0.46, 0.16, 0.028, 0.025],
+  [0.047, 0.55, 0.164, 0.027, 0.024],
+  [0.044, 0.635, 0.152, 0.025, 0.022],
+  [0.042, 0.705, 0.118, 0.021, 0.019],
+  [0.041, 0.752, 0.064, 0.014, 0.012],
+  [0.041, 0.772, 0, 0, 0],
 ];
-const TAIL_LOW = [0, 1, 3, 5, 7, 8, 10];
+const TAIL_LOW = [0, 1, 4, 7, 10];
 
 const pick = <T>(rows: T[], hi: boolean, low: number[]): T[] => (hi ? rows : low.map((i) => rows[i]));
 
@@ -569,7 +597,7 @@ function buildTorso(B: Builder, hi: boolean, rows: number[][]) {
       // darker saddle down the back
       c = mixc(c, PAL.furDark, 0.5 * sstep(0.25, 0.85, n[2]) * sstep(0.3, 0.55, p[1]));
       // cream belly, chest and throat
-      const front = sstep(-0.3, -0.72, n[2]) * sstep(0.17, 0.27, p[1]);
+      const front = sstep(-0.45, -0.8, n[2]) * sstep(0.17, 0.27, p[1]);
       c = mixc(c, PAL.belly, front);
       return [c[0], c[1], c[2], 1 - 0.65 * front];
     },
@@ -597,64 +625,56 @@ function buildHead(B: Builder, hi: boolean) {
       fur -= 0.6 * pale;
       // pale ring around the side eyes
       const ex = Math.abs(p[0]) - EYE_R[0], ey = p[1] - EYE_R[1], ez = p[2] - EYE_R[2];
-      const eyeRing = sstep(0.085, 0.055, Math.hypot(ex, ey, ez));
-      c = mixc(c, PAL.belly, 0.75 * eyeRing);
+      const eyeRing = sstep(0.09, 0.06, Math.hypot(ex, ey, ez));
+      c = mixc(c, PAL.belly, 0.45 * eyeRing);
       // the houra: a leathery, beak-like upper snout ...
-      const beak = sstep(-0.115, -0.16, p[2]) * sstep(-0.55, -0.1, n[1]);
+      const beak = sstep(-0.1, -0.145, p[2]) * sstep(-0.55, -0.1, n[1]);
       c = mixc(c, PAL.beak, beak);
       fur -= 0.5 * beak;
       // ... with a dark palate underneath (seen when the mouth opens)
-      const palate = sstep(-0.09, -0.13, p[2]) * sstep(-0.35, -0.7, n[1]);
+      const palate = sstep(-0.08, -0.115, p[2]) * sstep(-0.35, -0.7, n[1]);
       c = mixc(c, PAL.mouth, palate);
       fur *= 1 - palate;
+      // dark nose leather on the tip
+      const nose = sstep(-0.205, -0.222, p[2]) * sstep(-0.3, 0.2, n[1]);
+      c = mixc(c, PAL.nose, nose);
+      fur *= 1 - nose;
       return [c[0], c[1], c[2], clamp01(fur)];
     },
   });
 
   // nose pad on the tip of the houra
-  B.add(ellipsoid([0, 0.991, -0.304], [0.03, 0.018, 0.024], hi ? 8 : 5, hi ? 4 : 3, [0.25, 0, 0]), {
-    ...head,
-    paint: solid(PAL.nose),
-  });
+  if (hi) {
+    B.add(ellipsoid([0, 1.018, -0.221], [0.036, 0.021, 0.027], 8, 4, [0.6, 0, 0]), { ...head, paint: solid(PAL.nose) });
+  }
 
-  // eyes, wide on the sides of the head
-  const eyeSeg = hi ? 12 : 6, eyeStacks = hi ? 7 : 4;
+  // big eyes, wide on the sides of the head
+  const eyeSeg = hi ? 10 : 5, eyeStacks = hi ? 6 : 3;
   const eye = ellipsoid(EYE_R, [EYE_RADIUS, EYE_RADIUS, EYE_RADIUS], eyeSeg, eyeStacks, [0, 0, Math.PI / 2]);
   B.add(eye, { ...head, paint: solid(PAL.eye), tag: 2 });
   B.add(mirrorX(eye), { ...head, paint: solid(PAL.eye), tag: 2 });
   if (hi) {
     const d = norm([0.62, 0.52, -0.58]);
-    const shine = octa(add(EYE_R, mul(d, EYE_RADIUS * 0.93)), [0.012, 0.012, 0.012]);
+    const shine = octa(add(EYE_R, mul(d, EYE_RADIUS * 0.93)), [0.013, 0.013, 0.013]);
     B.add(shine, { ...head, paint: solid(PAL.shine), tag: 3, flat: true });
     B.add(mirrorX(shine), { ...head, paint: solid(PAL.shine), tag: 3, flat: true });
   }
 
   // small rounded ears
-  const ear = ellipsoid([0.098, 1.152, 0.062], [0.031, 0.036, 0.013], hi ? 8 : 4, hi ? 4 : 2, [0.1, 0.55, -0.45]);
+  const ear = ellipsoid([0.108, 1.156, 0.06], [0.033, 0.038, 0.014], hi ? 8 : 4, hi ? 4 : 2, [0.1, 0.55, -0.45]);
   const earPaint = (p: V3, n: V3): Paint => {
-    const inner = sstep(-0.2, -0.6, dot(n, norm([Math.sign(p[0]) * -0.3, 0, -1])) * -1 + 0.0);
-    const c = mixc(PAL.fur, PAL.earIn, 0.8 * sstep(0.2, 0.6, dot(n, norm([Math.sign(p[0]) * 0.45, 0.1, -1]))) + 0 * inner);
-    return [c[0], c[1], c[2], 0.9];
+    // darker, pinker inner ear on the forward-facing side
+    const inner = sstep(0.2, 0.6, dot(n, norm([Math.sign(p[0]) * 0.45, 0.1, -1])));
+    const c = mixc(PAL.fur, PAL.earIn, 0.8 * inner);
+    return [c[0], c[1], c[2], 0.9 - 0.5 * inner];
   };
   B.add(ear, { ...head, paint: earPaint });
   B.add(mirrorX(ear), { ...head, paint: earPaint });
 
-  // teeth along the rim of the houra (overbite: they hang outside the lower jaw)
-  const upper: [number, number][] = hi
-    ? [[-0.125, 0.021], [-0.16, 0.024], [-0.195, 0.024], [-0.23, 0.022], [-0.262, 0.02]]
-    : [[-0.15, 0.024], [-0.22, 0.023]];
-  for (const [z, l] of upper) {
-    const r = interpRow(HEAD, z);
-    const th = -0.72;
-    const base: V3 = [r[2] * Math.cos(th) * 0.98, r[1] + r[4] * Math.sin(th) + 0.004, z];
-    const tt = tooth(base, [0.18, -1, 0], l + 0.004, hi ? 0.0085 : 0.011);
-    B.add(tt, { ...head, paint: solid(PAL.teeth), flat: true });
-    B.add(mirrorX(tt), { ...head, paint: solid(PAL.teeth), flat: true });
-  }
-  // two front teeth
-  const front = tooth([0.011, 0.952, -0.296], [0.05, -1, -0.12], 0.03, hi ? 0.01 : 0.012);
-  B.add(front, { ...head, paint: solid(PAL.teeth), flat: true });
-  B.add(mirrorX(front), { ...head, paint: solid(PAL.teeth), flat: true });
+  // two broad front teeth, beaver style, in front of the shorter lower jaw
+  const inc = box([0.0105, 0.927, -0.229], [0.0095, 0.0135, 0.0045], [0.18, 0.06, 0]);
+  B.add(inc, { ...head, paint: solid(PAL.teeth), flat: true });
+  B.add(mirrorX(inc), { ...head, paint: solid(PAL.teeth), flat: true });
 }
 
 function interpRow(rows: number[][], z: number): number[] {
@@ -678,16 +698,18 @@ function buildJaw(B: Builder, hi: boolean) {
   B.add(loft(rings, seg), {
     ...jaw,
     paint: (p, n) => {
-      const top = sstep(0.25, 0.6, n[1]);
-      let c = mixc(PAL.muzzle, PAL.mouth, top);
-      c = mixc(c, PAL.tongue, top * sstep(0.035, 0.015, Math.abs(p[0])) * sstep(-0.05, -0.09, p[2]));
+      const top = sstep(0.5, 0.75, n[1]);
+      const lip = sstep(0.1, 0.35, n[1]) * (1 - top);
+      let c = mixc(PAL.muzzle, PAL.beak, 0.6 * lip);
+      c = mixc(c, PAL.mouth, top);
+      c = mixc(c, PAL.tongue, top * sstep(0.035, 0.015, Math.abs(p[0])) * sstep(-0.06, -0.1, p[2]));
       return [c[0], c[1], c[2], 0.4 * (1 - top)];
     },
   });
   if (hi) {
-    for (const z of [-0.12, -0.17, -0.22]) {
+    for (const z of [-0.1, -0.135, -0.17]) {
       const r = interpRow(JAW, z);
-      const tt = tooth([r[2] * 0.72, r[1] + r[3], z], [-0.1, 1, 0], 0.016, 0.007);
+      const tt = tooth([r[2] * 0.62, r[1] + r[3] * 0.72, z], [-0.1, 1, 0], 0.012, 0.0065);
       B.add(tt, { ...jaw, paint: solid(PAL.teeth), flat: true });
       B.add(mirrorX(tt), { ...jaw, paint: solid(PAL.teeth), flat: true });
     }
@@ -703,7 +725,7 @@ function armRings(hi: boolean): { rings: Ring[]; rows: number[][] } {
 }
 
 function buildArms(B: Builder, hi: boolean, torsoRows: number[][]) {
-  const seg = hi ? 12 : 6;
+  const seg = hi ? 10 : 6;
   const { rings, rows } = armRings(hi);
   const arm = loft(rings, seg);
   const wristY = ARM[ARM_WRIST][1];
@@ -724,10 +746,10 @@ function buildArms(B: Builder, hi: boolean, torsoRows: number[][]) {
 
   if (hi) {
     // stubby webbed fingers
-    for (const dz of [-0.034, 0, 0.032]) {
-      const f = ellipsoid([0.36, 0.333, -0.052 + dz], [0.018, 0.02, 0.016], 6, 3);
-      B.add(f, { ...specR, paint: solid(PAL.paw, 0.5) });
-      B.add(mirrorX(f), { ...specL, paint: solid(PAL.paw, 0.5) });
+    for (const dz of [-0.036, 0, 0.034]) {
+      const f = ellipsoid([0.404, 0.343, -0.052 + dz], [0.017, 0.021, 0.017], 5, 3);
+      B.add(f, { ...specR, weight: undefined, paint: solid(PAL.paw, 0.5) });
+      B.add(mirrorX(f), { ...specL, weight: undefined, paint: solid(PAL.paw, 0.5) });
     }
   }
 
@@ -762,9 +784,9 @@ function webbing(hi: boolean, torsoRows: number[][]): Prim {
   const grid: V3[][] = [];
   for (let r = 0; r <= rows; r++) {
     const f = r / rows;
-    const a = armAt(0.06 + 0.66 * f);
-    const toBody = norm([-1, 0.25, 0.1]);
-    const A = add(a.c, mul(toBody, a.r * 0.75));
+    const a = armAt(0.05 + 0.7 * f);
+    const toBody = norm([-1, 0.35, 0.1]);
+    const A = add(a.c, mul(toBody, a.r * 0.7));
     const y = 0.735 - 0.25 * f;
     const tp = torsoPoint(torsoRows, 0, y);
     const Bp: V3 = [tp[0] * 0.965, y, tp[2] + 0.012];
@@ -840,6 +862,7 @@ function buildLegs(B: Builder, hi: boolean) {
   B.add(mirrorX(leg), specL);
   // big flat paddle feet
   const foot = ellipsoid(FOOT_C, FOOT_R, hi ? 10 : 6, hi ? 5 : 3, [Math.PI / 2, FOOT_YAW, 0]);
+  // (poles along Z: the ellipsoid's local y radius is the foot length)
   const footPaint = (p: V3, n: V3): Paint => {
     const c = mixc(PAL.paw, PAL.furDark, 0.35 * sstep(0.3, 0.9, n[1]));
     return [c[0], c[1], c[2], 0.5];
@@ -849,7 +872,7 @@ function buildLegs(B: Builder, hi: boolean) {
   if (hi) {
     const R = euler([0, FOOT_YAW, 0]);
     for (const dx of [-0.036, 0, 0.036]) {
-      const toe = ellipsoid(add(FOOT_C, R([dx, -0.004, -0.098 + Math.abs(dx) * 0.35])), [0.02, 0.018, 0.024], 6, 3);
+      const toe = ellipsoid(add(FOOT_C, R([dx, -0.006, -0.1 + Math.abs(dx) * 0.4])), [0.02, 0.018, 0.024], 5, 3);
       B.add(toe, { ...specR, weight: undefined, paint: solid(PAL.paw, 0.5) });
       B.add(mirrorX(toe), { ...specL, weight: undefined, paint: solid(PAL.paw, 0.5) });
     }
@@ -883,7 +906,7 @@ function buildAccents(B: Builder, hi: boolean, torsoRows: number[][]) {
   const seg = hi ? 16 : 8;
   const slope = -1.25; // y = y0 + slope * x
   const y0 = 0.62;
-  const bands = hi ? [-1, -0.72, -0.5, 0, 0.5, 0.72, 1] : [-1, 0, 1];
+  const bands = hi ? [-1, -0.62, 0, 0.62, 1] : [-1, 0, 1];
   const halfW = 0.036;
   const p: V3[] = [];
   const uv: UV[] = [];
@@ -915,9 +938,10 @@ function buildAccents(B: Builder, hi: boolean, torsoRows: number[][]) {
     { p, t, uv },
     {
       ...body,
-      tag: 1,
+      // the dyed cloth takes the variant's colour (tag 1); the gold edging stays gold
+      tag: (q) => (hi && Math.abs(bands[q[0]]) > 0.9 ? 0 : 1),
       paint: (_p, _n, q) => {
-        const trim = hi && Math.abs(bands[q[0]]) > 0.6;
+        const trim = hi && Math.abs(bands[q[0]]) > 0.9;
         const c = trim ? PAL.gold : PAL.accent;
         return [c[0], c[1], c[2], 0];
       },
@@ -938,19 +962,17 @@ function buildAccents(B: Builder, hi: boolean, torsoRows: number[][]) {
       paint: solid(i % 2 === 0 ? PAL.turquoise : PAL.gold),
     });
   }
-  const pth = Math.PI * 1.5;
-  const py = hi ? 0.826 : 0.83;
-  const ps = torsoPoint(torsoRows, pth, py);
-  const pn = torsoNormal(torsoRows, pth, py);
-  B.add(disc(add(ps, mul(pn, 0.012)), add(pn, [0, 0.35, 0]), hi ? 0.028 : 0.032, 0.006, hi ? 6 : 4), {
-    ...body,
-    flat: true,
-    paint: solid(PAL.gold),
-  });
+  if (hi) {
+    const pth = Math.PI * 1.5;
+    const py = 0.826;
+    const ps = torsoPoint(torsoRows, pth, py);
+    const pn = torsoNormal(torsoRows, pth, py);
+    B.add(disc(add(ps, mul(pn, 0.012)), add(pn, [0, 0.35, 0]), 0.028, 0.006, 6), { ...body, flat: true, paint: solid(PAL.gold) });
+  }
 }
 
 /**
- * Build the Quinlan geometry (rest pose, indexed). 'high' ~2.5k triangles for close
+ * Build the Quinlan geometry (rest pose, indexed). 'high' ~2.9k triangles for close
  * NPCs / the player's shadow / photo mode, 'low' ~0.6k for crowds.
  * Add a per-instance `aAnim` attribute (see createQuinlanInstancedGeometry).
  */
@@ -1043,6 +1065,7 @@ const vec3 Q_HIP = ${v3(QUINLAN_JOINTS.hip)};
 const vec3 Q_SPINE = ${v3(QUINLAN_JOINTS.spine)};
 const vec3 Q_NECK = ${v3(QUINLAN_JOINTS.neck)};
 const vec3 Q_EYE = ${v3(EYE_R)};
+const vec3 Q_ELBOW = ${v3(QUINLAN_JOINTS.elbowR)};
 const float Q_ACCENT_LUM = ${f(accentLum)};
 const vec3 Q_ACCENTS[${ACCENTS_SRGB.length}] = vec3[${ACCENTS_SRGB.length}](
     ${accentsGlsl}
@@ -1055,6 +1078,8 @@ mat3 qRotZ( float a ) { float c = cos( a ), s = sin( a ); return mat3( c, s, 0.0
 // y = yaw (+ turns the snout towards -X), z = roll (+ raises the +X side).
 mat3 qEuler( vec3 e ) { return qRotY( e.y ) * qRotX( e.x ) * qRotZ( e.z ); }
 float qHash( float n ) { return fract( sin( n ) * 43758.5453 ); }
+// per-variant channels: 0 fur (CPU side), 1 clothing dye, 2-4 proportions, 5-9 posture
+float qH( float v, float k ) { return fract( sin( v * 78.233 + k * 12.9898 ) * 43758.5453 ); }
 
 struct QPose {
   vec3 rootT;  // whole-body translation (applied last)
@@ -1067,6 +1092,7 @@ struct QPose {
   vec3 legL;
   vec3 legR;
   vec4 lift;   // limb lift (m) before rotation: legL, legR, armL, armR
+  vec2 elbow;  // elbow flex L, R (rad, + brings the forearm forward)
   vec3 tail;   // about the tail base
   vec3 wave;   // tail undulation: amplitude at the tip (m), phase (rad), wavenumber
   vec2 face;   // x breathing (-1..1), y eye openness (0..1)
@@ -1074,22 +1100,23 @@ struct QPose {
 
 float qBlink( float t, float ph ) {
   float e = fract( t * 0.21 + ph * 3.7 );
-  return 0.08 + 0.92 * smoothstep( 0.0, 0.035, abs( e - 0.035 ) );
+  return 0.08 + 0.92 * smoothstep( 0.0, 0.035, abs( e - 0.5 ) );
 }
 
 QPose qRest( float v ) {
   QPose P;
   P.rootT = vec3( 0.0 );
   P.root = vec3( 0.0 );
-  P.spine = vec3( ( fract( v * 5.71 + 0.3 ) - 0.5 ) * 0.08, 0.0, 0.0 );
-  P.head = vec3( ( fract( v * 7.31 + 0.13 ) - 0.5 ) * 0.12, 0.0, ( fract( v * 13.17 + 0.41 ) - 0.5 ) * 0.18 );
+  P.spine = vec3( ( qH( v, 5.0 ) - 0.5 ) * 0.08, 0.0, 0.0 );
+  P.head = vec3( ( qH( v, 6.0 ) - 0.5 ) * 0.12, 0.0, ( qH( v, 7.0 ) - 0.5 ) * 0.18 );
   P.jaw = vec3( 0.0 );
-  float ab = ( fract( v * 5.23 + 0.7 ) - 0.5 ) * 0.12;
+  float ab = ( qH( v, 8.0 ) - 0.5 ) * 0.12;
   P.armL = vec3( 0.0, 0.0, -ab );
   P.armR = vec3( 0.0, 0.0, ab );
   P.legL = vec3( 0.0 );
   P.legR = vec3( 0.0 );
   P.lift = vec4( 0.0 );
+  P.elbow = vec2( 0.12 + 0.1 * qH( v, 9.0 ) );
   P.tail = vec3( 0.0 );
   P.wave = vec3( 0.0, 0.0, 1.0 );
   P.face = vec2( 0.0, 1.0 );
@@ -1141,6 +1168,7 @@ QPose qWalk( float t, float ph, float v ) {
   P.armR.x = 0.45 * s;
   P.armL.z -= 0.05;
   P.armR.z += 0.05;
+  P.elbow = vec2( 0.2 + 0.3 * max( -s, 0.0 ), 0.2 + 0.3 * max( s, 0.0 ) );
   P.head.x += 0.12 - 0.03 * cos( 2.0 * a );
   P.head.z += 0.07 * c;
   P.head.y += 0.05 * s;
@@ -1160,11 +1188,12 @@ QPose qRun( float t, float ph, float v ) {
   P.rootT.y = 0.04 * max( 0.0, sin( a + 0.8 ) ) - 0.015;
   P.spine.x = 0.1 * sin( a + 0.5 );
   float fore = -( pitch + P.spine.x );
-  P.armL = vec3( fore + 0.65 * sin( a + 2.9 ), 0.0, 0.34 );
-  P.armR = vec3( fore + 0.65 * sin( a + 3.3 ), 0.0, -0.34 );
+  P.armL = vec3( fore + 0.65 * sin( a + 2.9 ), 0.0, 0.46 );
+  P.armR = vec3( fore + 0.65 * sin( a + 3.3 ), 0.0, -0.46 );
   P.legL = vec3( -pitch + 0.6 * sin( a ), 0.0, 0.0 );
   P.legR = vec3( -pitch + 0.6 * sin( a + 0.4 ), 0.0, 0.0 );
-  P.lift = vec4( max( cos( a ), 0.0 ), max( cos( a + 0.4 ), 0.0 ), max( cos( a + 2.9 ), 0.0 ), max( cos( a + 3.3 ), 0.0 ) ) * 0.06;
+  P.lift = vec4( max( cos( a ), 0.0 ), max( cos( a + 0.4 ), 0.0 ), max( cos( a + 2.9 ), 0.0 ), max( cos( a + 3.3 ), 0.0 ) ) * vec4( 0.06, 0.06, 0.03, 0.03 );
+  P.elbow = vec2( 0.15 + 1.1 * max( cos( a + 2.9 ), 0.0 ), 0.15 + 1.1 * max( cos( a + 3.3 ), 0.0 ) );
   P.head.x += fore - 0.3 + 0.06 * sin( a + 1.0 );
   P.tail = vec3( -pitch * 0.92 + 0.18 * sin( a - 1.2 ), 0.05 * sin( a ), 0.0 );
   P.wave = vec3( 0.05, a - 1.0, 1.0 );
@@ -1184,6 +1213,7 @@ QPose qSwim( float t, float ph, float v ) {
   P.head = vec3( 1.28 + 0.05 * sin( 2.0 * a + 0.5 ), 0.0, -0.1 * s );
   P.armL = vec3( 1.45 + 0.95 * s, 0.0, -( 0.35 + 0.3 * c ) );
   P.armR = vec3( 1.45 - 0.95 * s, 0.0, 0.35 - 0.3 * c );
+  P.elbow = vec2( 0.1 + 1.0 * max( c, 0.0 ), 0.1 + 1.0 * max( -c, 0.0 ) ); // fold on the recovery stroke
   P.legL = vec3( -0.15 + 0.38 * sin( a + 0.6 ), 0.0, -0.1 );
   P.legR = vec3( -0.15 - 0.38 * sin( a + 0.6 ), 0.0, 0.1 );
   P.tail = vec3( 1.4 + 0.1 * sin( a - 0.7 ), 0.0, 0.0 );
@@ -1202,10 +1232,12 @@ QPose qSing( float t, float ph, float v ) {
   P.spine = vec3( 0.04 * sin( 2.0 * a ), 0.05 * sin( a + 0.8 ), 0.05 * sin( a - 0.6 ) );
   P.legL = vec3( 1.28, 0.28, -0.2 );
   P.legR = vec3( 1.28, -0.28, 0.2 );
-  P.tail = vec3( -0.3, 0.1 * s, 0.0 );
+  P.tail = vec3( -0.52, 0.1 * s, 0.0 );
+  P.wave = vec3( -0.13, 0.5 * Q_PI, 0.0 ); // static bend: lay the paddle back down flat
   float g = 0.5 + 0.5 * sin( 2.0 * a + 0.4 );
   P.armL = vec3( 0.5 + 0.25 * g, 0.2, -( 0.5 + 0.15 * g ) );
   P.armR = vec3( 0.5 + 0.25 * g, -0.2, 0.5 + 0.15 * g );
+  P.elbow = vec2( 0.35 + 0.35 * g );
   P.head = vec3( 0.3 + 0.05 * sin( 2.0 * a ), 0.1 * sin( a + 0.4 ), P.head.z - 0.7 * P.root.z );
   float n = sin( Q_TAU * ( t * 1.9 + ph ) );
   float phr = fract( t * 0.21 + ph * 1.7 );
@@ -1223,11 +1255,12 @@ QPose qSmile( float t, float ph, float v ) {
   P.jaw = vec3( 0.06, 0.02 * sin( r ), 0.12 * sin( r ) );
   P.head.x += 0.1;
   P.head.z += 0.1 * sin( Q_TAU * ( t * 0.55 + ph ) );
-  P.armL = vec3( 0.55, -0.25, 0.28 );
-  P.armR = vec3( 0.55, 0.25, -0.28 );
+  P.armL = vec3( 0.3, -0.2, 0.3 );
+  P.armR = vec3( 0.3, 0.2, -0.3 );
+  P.elbow = vec2( 1.15 ); // paws together in front
   P.tail.y = 0.25 * sin( Q_TAU * ( t * 1.3 + ph ) );
   P.rootT.y = 0.01 * abs( sin( r * 0.5 ) );
-  P.face.y = min( P.face.y, 0.62 );
+  P.face.y = min( P.face.y, 0.45 );
   return P;
 }
 
@@ -1252,6 +1285,7 @@ QPose qMixPose( QPose a, QPose b, float k ) {
   r.legL = mix( a.legL, b.legL, k );
   r.legR = mix( a.legR, b.legR, k );
   r.lift = mix( a.lift, b.lift, k );
+  r.elbow = mix( a.elbow, b.elbow, k );
   r.tail = mix( a.tail, b.tail, k );
   r.wave = mix( a.wave, b.wave, k );
   r.face = mix( a.face, b.face, k );
@@ -1269,7 +1303,7 @@ void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
   // variant proportions: belly, head size, tail length; plus breathing
   float belly = smoothstep( 0.12, 0.3, r0.y ) * ( 1.0 - smoothstep( 0.55, 0.82, r0.y ) );
   float chest = smoothstep( 0.42, 0.6, r0.y ) * ( 1.0 - smoothstep( 0.78, 0.92, r0.y ) );
-  float bodyScale = 1.0 + ( fract( v * 3.71 + 0.29 ) - 0.5 ) * 0.12 * belly + 0.016 * P.face.x * chest;
+  float bodyScale = 1.0 + ( qH( v, 2.0 ) - 0.5 ) * 0.12 * belly + 0.016 * P.face.x * chest;
   if ( part == 0 ) {
     p.xz *= bodyScale;
     float nk = smoothstep( 0.83, 0.97, r0.y ); // the neck follows the head a little
@@ -1287,13 +1321,15 @@ void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
       p.x += P.jaw.y * w;
     } else if ( aSkin.z > 1.5 ) {
       // eyes: blink / squint by squashing towards the eye's horizontal plane
+      // (and flattening against the head so a closed eye reads as a lid line)
       vec3 ec = vec3( sign( r0.x ) * Q_EYE.x, Q_EYE.yz );
       float o = max( P.face.y, 0.06 );
-      p.y = ec.y + ( p.y - ec.y ) * o;
-      n = normalize( vec3( n.x, n.y / max( o, 0.25 ), n.z ) );
+      float ox = mix( 0.55, 1.0, o );
+      p = ec + ( p - ec ) * vec3( ox, o, 1.0 );
+      n = normalize( vec3( n.x / ox, n.y / max( o, 0.25 ), n.z ) );
       if ( aSkin.z > 2.5 ) p = ec + ( p - ec ) * smoothstep( 0.2, 0.6, o );
     }
-    float hs = 1.0 + ( fract( v * 9.13 + 0.61 ) - 0.5 ) * 0.08;
+    float hs = 1.0 + ( qH( v, 3.0 ) - 0.5 ) * 0.08;
     p = Q_NECK + ( p - Q_NECK ) * hs;
     M = qEuler( P.head * ( part == 1 ? w : 1.0 ) );
     p = Q_NECK + M * ( p - Q_NECK );
@@ -1302,6 +1338,12 @@ void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
   } else if ( part <= 4 ) {
     bool left = part == 3;
     p.xz *= mix( bodyScale, 1.0, w ); // the torso edge of the webbing stays on the torso
+    // elbow: the forearm, hand and the lower arm edge of the webbing flex about the elbow
+    vec3 ep = vec3( sign( r0.x ) * Q_ELBOW.x, Q_ELBOW.yz );
+    float we = ( 1.0 - smoothstep( Q_ELBOW.y - 0.045, Q_ELBOW.y + 0.045, r0.y ) ) * w;
+    M = qRotX( ( left ? P.elbow.x : P.elbow.y ) * we );
+    p = ep + M * ( p - ep );
+    n = M * n;
     p.y += ( left ? P.lift.z : P.lift.w ) * w;
     M = qEuler( ( left ? P.armL : P.armR ) * w );
     p = piv + M * ( p - piv );
@@ -1315,7 +1357,7 @@ void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
     n = M * n;
   } else {
     vec3 d = p - piv;
-    d.z *= 1.0 + ( fract( v * 17.3 + 0.17 ) - 0.5 ) * 0.16;
+    d.z *= 1.0 + ( qH( v, 4.0 ) - 0.5 ) * 0.16;
     float s = max( d.z, 0.0 ) * 1.6;
     float wph = P.wave.y - P.wave.z * s * 3.0;
     float dy = P.wave.x * s * s * sin( wph );
@@ -1346,7 +1388,7 @@ void quinlanAnimate( inout vec3 p, inout vec3 n ) {
 }
 
 vec3 qAccent( float v ) {
-  int i = int( floor( fract( v * 7.919 + 0.123 ) * ${f(ACCENTS_SRGB.length)} ) );
+  int i = int( floor( qH( v, 1.0 ) * ${f(ACCENTS_SRGB.length)} ) );
   return Q_ACCENTS[ clamp( i, 0, ${ACCENTS_SRGB.length - 1} ) ];
 }
 

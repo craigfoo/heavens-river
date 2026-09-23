@@ -13,6 +13,8 @@ export class Lighting {
   state: SkyState;
   readonly sunDir = new Vector3(0, 1, 0);
   shadowRange = 90;
+  /** Golden-hour artistic liberty: light zone along the axis at dawn/dusk. */
+  liberty = true;
   private tmp = new Vector3();
 
   constructor() {
@@ -48,6 +50,7 @@ export class Lighting {
 
   update(timeOfDay: number, camPos: Vector3) {
     const st = computeSky(timeOfDay, this.state);
+    if (!this.liberty) st.elevation = Math.PI / 2;
     sunDirection(st, this.sunDir);
     // Shadow frustum follows the camera, snapped to texels to avoid shimmer.
     const texel = (2 * this.shadowRange) / this.sun.shadow.mapSize.x;

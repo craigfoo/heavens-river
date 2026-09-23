@@ -262,6 +262,19 @@ export class TownManager implements Collider {
     }
   }
 
+  /** True if a circle at town-local (x, z) overlaps a building footprint at height h. */
+  blockedLocal(t: LoadedTown, x: number, z: number, h: number, radius = 0.4): boolean {
+    const list = t.colGrid.get(key(Math.floor(x / GRID), Math.floor(z / GRID)));
+    if (!list) return false;
+    const c = t.colliders;
+    for (const i of list) {
+      const b = i * 10;
+      if (h > c[b + 9] || h + 1.0 < c[b + 8]) continue;
+      if (pushOutQuad(c, b, x, z, radius)) return true;
+    }
+    return false;
+  }
+
   /** Highest walkable structure surface under (s, z) that is not above h + step. */
   floorAt(s: number, z: number, h: number, step = 0.6): number | null {
     let best: number | null = null;

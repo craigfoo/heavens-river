@@ -15,6 +15,12 @@ import { WorldQuery } from './world/worldQuery';
 import { TerrainManager } from './world/terrain/terrainManager';
 import { GrassField } from './world/vegetation/grass';
 import { TownManager } from './towns/townManager';
+import { Portals } from './world/portals';
+import { TownLife } from './npc/townLife';
+import { PlayerAvatar } from './npc/avatar';
+import { SurveillanceBirds } from './npc/birds';
+import { newSample } from './world/gen/world';
+import { SECTION_COUNT } from './config';
 
 export const WORLD_SEED = 0x5eed;
 
@@ -30,6 +36,11 @@ export class App {
   terrain: TerrainManager;
   readonly grass = new GrassField();
   towns: TownManager;
+  readonly portals = new Portals();
+  readonly life: TownLife;
+  readonly avatar = new PlayerAvatar();
+  readonly birds: SurveillanceBirds;
+  private camSample = newSample();
   gen: WorldGen;
   world: WorldQuery;
   section = 0;
@@ -48,6 +59,14 @@ export class App {
   private axisX = new Vector3(1, 0, 0);
   onFrame: ((dt: number) => void)[] = [];
   readonly testMode: boolean;
+  /** When set, the camera shows this pose instead of the player's eyes. */
+  cameraOverride: { s: number; z: number; h: number; yaw: number; pitch: number; roll?: number } | null = null;
+  /** Stop world time (photo mode): NPCs, water and the clock hold still. */
+  simFrozen = false;
+  /** Called right after a frame is rendered (e.g. to capture the canvas). */
+  afterRender: (() => void)[] = [];
+  /** Freeze player simulation (menus, cutscenes). */
+  paused = false;
   debugText: HTMLDivElement;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -74,6 +93,13 @@ export class App {
     this.towns = new TownManager(this.terrain.pool, this.gen);
     this.scene.add(this.towns.group);
     this.world.colliders.push(this.towns);
+    this.life = new TownLife(this.towns, this.world);
+    this.scene.add(this.life.group);
+    this.scene.add(this.avatar.mesh);
+    this.birds = new SurveillanceBirds(this.towns);
+    this.scene.add(this.birds.group);
+    this.portals.build(this.gen);
+    this.scene.add(this.portals.group);
     this.scene.add(this.sky.mesh);
     this.scene.add(this.lighting.sun, this.lighting.target, this.lighting.hemi);
     this.debugText = document.createElement('div');
@@ -88,23 +114,58 @@ export class App {
     this.pipeline.resize(window.innerWidth, window.innerHeight);
   }
 
+  /** Switch to another section of the strand (regenerates the world). */
+  setSection(n: number) {
+    this.section = mod(n, SECTION_COUNT);
+    this.gen = new WorldGen(this.section, WORLD_SEED);
+    this.world.setGen(this.gen);
+    this.terrain.setSection(this.section, WORLD_SEED);
+    this.towns.setGen(this.gen);
+    this.portals.build(this.gen);
+  }
+
+  /** Apply a graphics quality preset. */
+  setQuality(q: 'low' | 'medium' | 'high') {
+    const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    this.terrain.lodK = q === 'low' ? 0.9 : q === 'medium' ? 1.05 : 1.2;
+    this.lighting.setShadowQuality(q === 'low' ? 1024 : 2048, q === 'low' ? 60 : 90);
+    this.grass.setDensity(q === 'low' ? 0.35 : q === 'medium' ? 0.65 : 1);
+    this.pipeline.vision.setResolutionScale(q === 'low' ? 0.5 : q === 'medium' ? 0.6 : 0.75);
+    const pr = Math.min(window.devicePixelRatio, q === 'high' && !mobile ? 2 : q === 'medium' ? 1.5 : 1);
+    if (!this.testMode) {
+      this.pipeline.renderer.setPixelRatio(pr);
+      this.resize();
+    }
+  }
+
   /** Put the player somewhere and make the render frame follow. */
   spawn(s: number, z: number, yaw = 0) {
     this.player.teleport(s, z, this.world, yaw);
     frame.maybeRebase(this.player.s, this.player.z, true);
   }
 
-  updateCamera() {
+  /** Camera pose in cylinder coordinates (player eyes unless overridden). */
+  cameraPose() {
+    const o = this.cameraOverride;
+    if (o) return o;
     const p = this.player;
-    const eye = p.eyeH;
-    frame.maybeRebase(p.s, p.z);
-    frame.toRender(p.s, p.z, eye, this.camera.position);
-    const th = frame.thetaAt(p.s);
+    return { s: p.s, z: p.z, h: p.eyeH, yaw: p.yaw, pitch: p.pitch };
+  }
+
+  updateCamera() {
+    const c = this.cameraPose();
+    frame.maybeRebase(c.s, c.z);
+    frame.toRender(c.s, c.z, c.h, this.camera.position);
+    const th = frame.thetaAt(c.s);
     this.camQ.setFromAxisAngle(this.axisZ, th);
-    this.tmpQ.setFromAxisAngle(this.axisY, p.yaw);
+    this.tmpQ.setFromAxisAngle(this.axisY, c.yaw);
     this.camQ.multiply(this.tmpQ);
-    this.tmpQ.setFromAxisAngle(this.axisX, p.pitch);
+    this.tmpQ.setFromAxisAngle(this.axisX, c.pitch);
     this.camQ.multiply(this.tmpQ);
+    if ('roll' in c && c.roll) {
+      this.tmpQ.setFromAxisAngle(this.axisZ, c.roll);
+      this.camQ.multiply(this.tmpQ);
+    }
     this.camera.quaternion.copy(this.camQ);
     this.camera.updateMatrixWorld();
     // world-anchored pattern offsets
@@ -122,29 +183,37 @@ export class App {
 
   /** Advance the simulation by dt and render one frame. */
   step(dt: number, render = true) {
-    this.elapsed += dt;
+    const simDt = this.simFrozen ? 0 : dt;
+    this.elapsed += simDt;
     U.uTime.value = this.elapsed;
-    if (!this.timeFrozen) this.timeOfDay = mod(this.timeOfDay + dt / (this.dayMinutes * 60), 1);
+    if (!this.timeFrozen) this.timeOfDay = mod(this.timeOfDay + simDt / (this.dayMinutes * 60), 1);
     const inp = this.input.poll();
-    this.player.update(dt, inp, this.world);
+    if (!this.paused) this.player.update(dt, inp, this.world);
     for (const f of this.onFrame) f(dt);
     this.updateCamera();
     this.lighting.update(this.timeOfDay, this.camera.position);
     U.uStarRot.value = this.timeOfDay * Math.PI * 2 * 0.25;
     // underwater state for all materials
-    const wl = this.player.waterLevel;
-    const eye = this.player.eyeH;
+    const cam = this.cameraPose();
+    const wl = this.cameraOverride ? this.world.sampleAt(cam.s, cam.z, this.camSample).water : this.player.waterLevel;
+    const eye = cam.h;
     const under = eye < wl - 0.02;
     U.uUnderwater.value = under ? 1 : 0;
-    U.uWaterY.value = under ? frame.toRender(this.player.s, this.player.z, wl, _v).y : -1e9;
+    U.uWaterY.value = under ? frame.toRender(cam.s, cam.z, wl, _v).y : -1e9;
     this.pipeline.grading.u('underwater').value = under ? 1 : 0;
     this.pipeline.grading.u('time').value = this.elapsed;
     this.pipeline.grading.u('exposure').value = this.lighting.state.exposure;
-    this.terrain.update({ s: this.player.s, z: this.player.z, h: eye });
-    this.grass.update(this.player.s, this.player.z, this.terrain);
-    this.towns.update(this.player.s, this.player.z, this.camera.position);
-    this.sky.update(this.camera, Z_MIN - frame.originZ, Z_MAX - frame.originZ);
-    if (render) this.pipeline.render(dt);
+    this.terrain.update({ s: cam.s, z: cam.z, h: eye });
+    this.grass.update(cam.s, cam.z, this.terrain);
+    this.towns.update(cam.s, cam.z, this.camera.position);
+    this.life.update(simDt, cam, this.player, this.timeOfDay);
+    this.avatar.update(simDt, this.player);
+    this.birds.update(simDt, cam, this.player);
+    this.sky.update(Z_MIN - frame.originZ, Z_MAX - frame.originZ);
+    if (render) {
+      this.pipeline.render(dt);
+      for (const f of this.afterRender.splice(0)) f();
+    }
     this.stats(dt);
   }
 

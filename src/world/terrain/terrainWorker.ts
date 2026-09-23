@@ -3,7 +3,7 @@
 import { CIRC, Z_MAX, Z_MIN } from '../../config';
 import { newSample, WorldGen } from '../gen/world';
 import { biomeColor, buildChunk, type BiomeOut } from './chunkBuilder';
-import type { ChunkResult, FarShellResult, WorkerRequest } from './chunkTypes';
+import type { ChunkResult, FarShellResult, MapResult, WorkerRequest } from './chunkTypes';
 import { buildTown, townTransferables } from '../../towns/townBuilder';
 
 let gen: WorldGen | null = null;
@@ -56,6 +56,30 @@ function farShell(ns: number, nz: number): FarShellResult {
   return { type: 'farshell', ns, nz, height, color, water };
 }
 
+function mapData(nz: number, ns: number): MapResult {
+  const g = gen!;
+  const height = new Float32Array(nz * ns);
+  const color = new Uint8Array(nz * ns * 4);
+  const water = new Uint8Array(nz * ns);
+  const o = newSample();
+  const bo: BiomeOut = { rgb: [0, 0, 0], grass: 0, rock: 0, sand: 0, farm: 0, snow: 0 };
+  const dZ = (Z_MAX - Z_MIN) / nz;
+  const dS = CIRC / ns;
+  for (let j = 0; j < ns; j++)
+    for (let i = 0; i < nz; i++) {
+      const k = j * nz + i;
+      g.sample((j + 0.5) * dS, Z_MIN + (i + 0.5) * dZ, 1500, o);
+      height[k] = o.h;
+      biomeColor(o, 0.95, (j + 0.5) * dS, Z_MIN + (i + 0.5) * dZ, bo);
+      color[k * 4] = bo.rgb[0];
+      color[k * 4 + 1] = bo.rgb[1];
+      color[k * 4 + 2] = bo.rgb[2];
+      color[k * 4 + 3] = Math.round(o.forest * 255);
+      water[k] = o.water > o.h ? 255 : Math.round(Math.max(0, 1 - o.edge / 1500) * 120);
+    }
+  return { type: 'map', nz, ns, height, color, water };
+}
+
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   const msg = e.data;
   if (msg.type === 'init') {
@@ -69,6 +93,9 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     if (!site) return;
     const res = buildTown(gen!, site);
     (self as unknown as Worker).postMessage(res, townTransferables(res));
+  } else if (msg.type === 'map') {
+    const res = mapData(msg.nz, msg.ns);
+    (self as unknown as Worker).postMessage(res, [res.height.buffer, res.color.buffer, res.water.buffer]);
   } else if (msg.type === 'farshell') {
     const res = farShell(msg.ns, msg.nz);
     (self as unknown as Worker).postMessage(res, [res.height.buffer, res.color.buffer, res.water.buffer]);

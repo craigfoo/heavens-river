@@ -77,6 +77,8 @@ export class TerrainManager {
   private visibleSet: TNode[] = [];
   /** Split when distance < K * node size. */
   lodK = 1.2;
+  /** Finest level allowed (lowered while travelling fast). */
+  maxLevel = MAX_LEVEL;
   nearBlock = 2;
   maxCached = 900;
   vegetation = true;
@@ -147,7 +149,7 @@ export class TerrainManager {
 
   private collect(n: TNode, cam: CameraState, out: TNode[], req: TNode[]): boolean {
     n.touched = this.frameNo;
-    const split = n.level < MAX_LEVEL && this.dist(n, cam) < this.lodK * n.size;
+    const split = n.level < this.maxLevel && this.dist(n, cam) < this.lodK * n.size;
     if (split) {
       const tmp: TNode[] = [];
       let ok = true;

@@ -188,15 +188,17 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     tRough = 0.28;
     tMetal = 1.0;
   } else if (t == 12) {
-    // cobblestones
-    vec2 g = uv / 0.34;
+    // cobblestones: small, irregular setts
+    vec2 g = uv / vec2(0.19, 0.16);
     float row = floor(g.y);
-    g.x += mod(row, 2.0) * 0.5;
+    g.x += tHash(vec2(row, 9.0)) * 3.0;
+    vec2 cell = floor(g);
     vec2 f = fract(g) - 0.5;
-    float h = tHash(floor(g));
-    float stone = length(f * vec2(1.0, 1.15));
-    col = base * (0.7 + 0.4 * h) * (0.9 + 0.1 * tNoise(uv * 9.0));
-    col = mix(col, base * 0.42, smoothstep(0.38, 0.5 + fw * 2.0, stone) * detail);
+    f += (vec2(tHash(cell + 3.1), tHash(cell + 7.9)) - 0.5) * 0.18;
+    float h = tHash(cell);
+    float stone = pow(pow(abs(f.x) * 1.9, 3.0) + pow(abs(f.y) * 1.9, 3.0), 1.0 / 3.0);
+    col = base * (0.68 + 0.45 * h) * (0.9 + 0.12 * tNoise(uv * 11.0));
+    col = mix(col, base * 0.4, smoothstep(0.78, 0.98 + fw * 4.0, stone) * detail);
     tRough = 0.8;
   } else if (t == 13) {
     // mosaic: tesserae in concentric wave rings
@@ -258,11 +260,11 @@ roughnessFactor = tRough;
 metalnessFactor = tMetal;
 `;
 
-export function createTownMaterial(): MeshStandardMaterial {
+export function createTownMaterial(bend = true): MeshStandardMaterial {
   const m = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 });
   patchWorldMaterial(m, {
-    key: 'town',
-    bend: true,
+    key: bend ? 'town' : 'town-rigid',
+    bend,
     vertexPars,
     vertexBegin,
     fragmentPars,

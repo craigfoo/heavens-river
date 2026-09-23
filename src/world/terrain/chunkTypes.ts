@@ -64,7 +64,23 @@ export interface FarShellResult {
 
 import type { TownRequest, TownResult } from '../../towns/townBuilder';
 
-export type WorkerRequest = ChunkRequest | InitMessage | FarShellRequest | TownRequest;
-export type WorkerResult = ChunkResult | FarShellResult | TownResult | { type: 'ready' };
+export interface MapRequest {
+  type: 'map';
+  nz: number;
+  ns: number;
+}
+
+export interface MapResult {
+  type: 'map';
+  nz: number;
+  ns: number;
+  /** Row-major (s rows, z columns): height, then RGBA colour. */
+  height: Float32Array;
+  color: Uint8Array;
+  water: Uint8Array;
+}
+
+export type WorkerRequest = ChunkRequest | InitMessage | FarShellRequest | TownRequest | MapRequest;
+export type WorkerResult = ChunkResult | FarShellResult | TownResult | MapResult | { type: 'ready' };
 
 export const TREE_STRIDE = 8;

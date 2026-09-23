@@ -12,9 +12,14 @@ export interface InputFrame {
   jumpPressed: boolean;
   dive: boolean;
   burst: boolean;
-  eyeL: number; // independent-eye steering
-  eyeR: number;
+  eyeL: number; // independent-eye steering (Q / LB held)
+  eyeR: number; // (E / RB held)
+  /** Look delta diverted to the steered eye(s) when eye steering is active. */
+  eyeDX: number;
+  eyeDY: number;
 }
+
+const IDLE: InputFrame = { moveX: 0, moveY: 0, lookX: 0, lookY: 0, quad: false, walkSlow: false, jump: false, jumpPressed: false, dive: false, burst: false, eyeL: 0, eyeR: 0, eyeDX: 0, eyeDY: 0 };
 
 export class Input {
   private keys = new Set<string>();
@@ -27,11 +32,16 @@ export class Input {
   enabled = true;
   private element: HTMLElement;
   private handlers = new Map<string, ((e: KeyboardEvent) => void)[]>();
+  private upHandlers = new Map<string, ((e: KeyboardEvent) => void)[]>();
+  /** When set, holding Q/E diverts mouse look to the independent eyes. */
+  eyeSteering = false;
   // touch
   private touchMove = { id: -1, x0: 0, y0: 0, x: 0, y: 0 };
   private touchLook = { id: -1, x: 0, y: 0 };
   touchActive = false;
   private touchJump = false;
+  /** Most recent polled frame (for systems updated after the player). */
+  last: InputFrame = { ...IDLE };
 
   constructor(element: HTMLElement) {
     this.element = element;
@@ -43,7 +53,11 @@ export class Input {
       for (const h of this.handlers.get(e.code) ?? []) h(e);
       if (['Tab', 'Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keyup', (e) => {
+      if (!this.keys.has(e.code)) return;
+      this.keys.delete(e.code);
+      for (const h of this.upHandlers.get(e.code) ?? []) h(e);
+    });
     window.addEventListener('blur', () => this.keys.clear());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.element;
@@ -61,6 +75,13 @@ export class Input {
     const list = this.handlers.get(code) ?? [];
     list.push(fn);
     this.handlers.set(code, list);
+  }
+
+  /** Register a key-release handler. */
+  onUp(code: string, fn: (e: KeyboardEvent) => void) {
+    const list = this.upHandlers.get(code) ?? [];
+    list.push(fn);
+    this.upHandlers.set(code, list);
   }
 
   requestLock() {
@@ -182,11 +203,20 @@ export class Input {
       mx /= len;
       my /= len;
     }
+    let eyeDX = 0;
+    let eyeDY = 0;
+    if (this.eyeSteering && (eyeL || eyeR)) {
+      eyeDX = lx;
+      eyeDY = ly;
+      lx = 0;
+      ly = 0;
+    }
     this.pressed.clear();
     if (!this.enabled) {
-      return { moveX: 0, moveY: 0, lookX: 0, lookY: 0, quad: false, walkSlow: false, jump: false, jumpPressed: false, dive: false, burst: false, eyeL: 0, eyeR: 0 };
+      this.last = { ...IDLE };
+      return this.last;
     }
-    return {
+    return (this.last = {
       moveX: mx,
       moveY: my,
       lookX: lx,
@@ -199,6 +229,8 @@ export class Input {
       burst: quad,
       eyeL,
       eyeR,
-    };
+      eyeDX,
+      eyeDY,
+    });
   }
 }

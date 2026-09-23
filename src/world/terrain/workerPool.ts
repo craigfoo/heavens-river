@@ -1,6 +1,6 @@
 // A small pool of terrain workers sharing one priority queue.
 
-import type { ChunkRequest, ChunkResult, FarShellResult, WorkerRequest, WorkerResult } from './chunkTypes';
+import type { ChunkRequest, ChunkResult, FarShellResult, MapResult, WorkerRequest, WorkerResult } from './chunkTypes';
 import type { TownResult } from '../../towns/townBuilder';
 
 interface Slot {
@@ -18,6 +18,7 @@ export class TerrainWorkerPool {
   onChunk: (r: ChunkResult) => void = () => {};
   onFarShell: (r: FarShellResult) => void = () => {};
   onTown: (r: TownResult) => void = () => {};
+  onMap: (r: MapResult) => void = () => {};
   private townQueue: number[] = [];
   private townPending = new Set<number>();
   private epoch = 0;
@@ -69,6 +70,8 @@ export class TerrainWorkerPool {
       if (this.slotEpoch.get(slot) === this.epoch) this.onChunk(msg);
     } else if (msg.type === 'farshell') {
       if (this.slotEpoch.get(slot) === this.epoch) this.onFarShell(msg);
+    } else if (msg.type === 'map') {
+      if (this.slotEpoch.get(slot) === this.epoch) this.onMap(msg);
     } else if (msg.type === 'town') {
       this.townPending.delete(msg.siteId);
       if (this.slotEpoch.get(slot) === this.epoch) this.onTown(msg);
@@ -85,6 +88,22 @@ export class TerrainWorkerPool {
 
   isPending(key: string) {
     return this.queued.has(key) || this.inflight.has(key);
+  }
+
+  requestMap(nz: number, ns: number) {
+    const epoch = this.epoch;
+    const trySend = () => {
+      if (epoch !== this.epoch) return;
+      const slot = this.slots.find((s) => s.ready && !s.busy);
+      if (!slot) {
+        setTimeout(trySend, 40);
+        return;
+      }
+      slot.busy = true;
+      slot.job = '__map';
+      slot.worker.postMessage({ type: 'map', nz, ns } satisfies WorkerRequest);
+    };
+    trySend();
   }
 
   requestFarShell(ns: number, nz: number) {

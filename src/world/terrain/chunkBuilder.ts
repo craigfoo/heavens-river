@@ -48,6 +48,10 @@ export interface BiomeOut {
 export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, out: BiomeOut): BiomeOut {
   const col = out.rgb;
   const slope = 1 - ny;
+  // gradient (tan of the slope angle): fields only on gentle ground
+  const grad = Math.sqrt(Math.max(0, 1 - ny * ny)) / Math.max(ny, 0.05);
+  const arable = smoothstep(0.26, 0.1, grad);
+  const alpine = smoothstep(1700, 3000, o.h - o.baseLevel);
   const m = o.moisture;
   mix3(C.grassGold, C.grassLush, smoothstep(0.35, 0.8, m), col);
   mix3(col, C.grassDry, smoothstep(0.35, 0.05, m) * 0.7, col);
@@ -56,11 +60,13 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
   let sand = 0;
   let farm = 0;
   let snow = 0;
-  if (o.forest > 0) mix3(col, C.forest, o.forest * 0.85, col);
-  if (o.orchard > 0) mix3(col, C.orchard, o.orchard * 0.5, col);
-  if (o.farm > 0) {
-    mix3(col, C.farm, o.farm, col);
-    farm = o.farm;
+  const forest = o.forest * (1 - alpine);
+  if (forest > 0) mix3(col, C.forest, forest * 0.85, col);
+  if (o.orchard > 0) mix3(col, C.orchard, o.orchard * 0.5 * arable * (1 - alpine), col);
+  const f0 = o.farm * arable * (1 - alpine);
+  if (f0 > 0) {
+    mix3(col, C.farm, f0, col);
+    farm = f0;
   }
   // wetlands and reed beds on low ground near water
   const above = o.h - o.baseLevel;
@@ -84,7 +90,8 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
     farm = 0;
   }
   // rock on steep slopes and ridges
-  const r = clamp(smoothstep(0.28, 0.55, slope) + o.ridge * 0.9 * smoothstep(0.1, 0.3, slope), 0, 1);
+  const r = clamp(smoothstep(0.75, 1.3, grad) + o.ridge * 0.9 * smoothstep(0.35, 0.7, grad) + alpine * smoothstep(0.45, 0.8, grad), 0, 1);
+  void slope;
   if (r > 0) {
     mix3(col, slope > 0.6 ? C.rockDark : C.rock, r, col);
     rock = r;
@@ -118,6 +125,7 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
 }
 
 const _bo: BiomeOut = { rgb: [0, 0, 0], grass: 0, rock: 0, sand: 0, farm: 0, snow: 0 };
+const _t2 = newSample();
 
 export function buildChunk(gen: WorldGen, req: ChunkRequest): ChunkResult {
   const t0 = performance.now();
@@ -358,12 +366,18 @@ function placeTrees(gen: WorldGen, req: ChunkRequest, ctx: ReturnType<WorldGen['
       if (s < req.s0 || s >= req.s0 + req.sizeS || z < req.z0 || z >= req.z0 + req.sizeZ) continue;
       gen.sample(s, z, 8, o, ctx);
       if (o.water > o.h - 0.3) continue;
+      if (o.h - o.baseLevel > 2600) continue;
       const riverside = (1 - smoothstep(4, 30, o.edge)) * smoothstep(1.5, 3.5, o.edge) * 0.5;
       const scattered = 0.018 * (1 - o.farm) * (1 - o.town);
       const orchard = o.orchard * 0.5;
       const dens = Math.max(o.forest * 0.95, orchard, riverside, scattered) * (o.h > 3200 ? smoothstep(4200, 3200, o.h) : 1);
       if (r1 / 0.55 > dens) continue;
       if (o.town > 0.3) continue;
+      // no trees on cliffs
+      const h0 = o.h;
+      const gs = (gen.sample(s + 4, z, 8, _t2, ctx).h - h0) / 4;
+      const gz = (gen.sample(s, z + 4, 8, _t2, ctx).h - h0) / 4;
+      if (gs * gs + gz * gz > 0.8) continue;
       let type = 0;
       if (riverside >= dens - 1e-6 && riverside > 0.05) type = 2; // willow
       else if (orchard >= dens - 1e-6 && orchard > 0.05) type = 3; // orchard
