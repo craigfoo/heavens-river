@@ -25,6 +25,7 @@ import {
   PCFSoftShadowMap,
 } from 'three';
 import { VisionPass } from './vision';
+import { SunShaftsEffect } from './sunShafts';
 
 const gradingFrag = /* glsl */ `
 uniform float exposure;
@@ -90,6 +91,8 @@ export class Pipeline {
   readonly dof: DepthOfFieldEffect;
   readonly renderPass: RenderPass;
   readonly vision: VisionPass;
+  readonly shafts = new SunShaftsEffect();
+  private shaftsPass: EffectPass;
   private effectPass: EffectPass;
   private dofPass: EffectPass;
   private smaaPass: EffectPass | null = null;
@@ -123,6 +126,8 @@ export class Pipeline {
     this.vision = new VisionPass(scene, camera, opts.msaa);
     this.vision.enabled = false;
     this.composer.addPass(this.vision);
+    this.shaftsPass = new EffectPass(camera, this.shafts);
+    this.composer.addPass(this.shaftsPass);
     this.bloom = new BloomEffect({
       mipmapBlur: true,
       luminanceThreshold: 1.1,
@@ -154,6 +159,8 @@ export class Pipeline {
     const on = mode !== 'off';
     this.renderPass.enabled = !on;
     this.vision.enabled = on;
+    // the multi-view composite has no matching depth buffer for the shafts
+    this.shaftsPass.enabled = !on;
     if (on) this.vision.setMode(mode);
   }
 

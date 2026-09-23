@@ -3,7 +3,7 @@
 import { PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
 import { CIRC, R, Z_MAX, Z_MIN } from './config';
 import { frame } from './coords/cylinder';
-import { mod } from './core/math';
+import { mod, smoothstep } from './core/math';
 import { Pipeline } from './render/pipeline';
 import { U } from './render/uniforms';
 import { Lighting } from './sky/lighting';
@@ -212,6 +212,11 @@ export class App {
     this.pipeline.grading.u('underwater').value = under ? 1 : 0;
     this.pipeline.grading.u('time').value = this.elapsed;
     this.pipeline.grading.u('exposure').value = this.lighting.state.exposure;
+    // god rays: strongest with a low golden sun, gone at night and underwater
+    const sd = U.uSunDir.value;
+    const low = 1 - smoothstep(0.2, 0.75, sd.y);
+    const shafts = under ? 0 : 0.42 * (1 - U.uNight.value) * (0.25 + 0.75 * low) * U.uHoloOn.value;
+    this.pipeline.shafts.setSun(this.camera, sd, shafts, U.uSunColor.value);
     this.terrain.update({ s: cam.s, z: cam.z, h: eye });
     this.grass.update(cam.s, cam.z, this.terrain);
     this.towns.update(cam.s, cam.z, this.camera.position);
