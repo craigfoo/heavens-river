@@ -54,6 +54,11 @@ vec3 treeTint() {
   else if (type > 2.5) c = vec3(0.26, 0.40, 0.12);
   c *= 0.75 + 0.5 * aTree.y;
   c = mix(c, c * vec3(1.3, 1.05, 0.6), step(0.82, aTree.y) * 0.6);
+  // blossom: many orchard trees and the odd broadleaf flower pink or white
+  float pick = fract(aTree.z * 7.31 + aTree.y * 3.17);
+  float bloom = type > 2.5 ? step(0.45, pick) : (type < 0.5 ? step(0.9, pick) : 0.0);
+  vec3 petal = mix(vec3(0.86, 0.46, 0.58), vec3(0.88, 0.80, 0.80), step(0.8, fract(pick * 5.7)));
+  c = mix(c, petal * (0.85 + 0.3 * aTree.y), bloom * 0.85);
   return c;
 }
 `;

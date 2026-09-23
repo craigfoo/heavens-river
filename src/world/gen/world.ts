@@ -325,7 +325,7 @@ export class WorldGen {
     const wA = (1 - smoothstep(5, 9, v)) * smoothstep(-1.0, 0.3, u) * (1 - smoothstep(9, 18, u));
     h = lerp(h, b - 0.04, wA);
     // trodden gravel instead of grass right in front of the door
-    o.town = Math.max(o.town, wA * (1 - smoothstep(2.0, 5.0, u)) * (1 - smoothstep(3.2, 4.8, v)));
+    o.town = Math.max(o.town, wA * (1 - smoothstep(1.5, 4.5, u)) * (1 - smoothstep(3.2, 4.8, v)));
     // hollow under the block (its walls hide the transition)
     const wDip = (1 - smoothstep(HATCH.halfW - 1.9, HATCH.halfW - 1.1, v)) * (1 - smoothstep(HATCH.depth - 1.2, HATCH.depth - 0.6, -u)) * (1 - smoothstep(0.1, 0.6, u));
     h = lerp(h, b - 0.5, wDip);

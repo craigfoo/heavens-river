@@ -309,7 +309,7 @@ export class Game {
       const city = app.gen.towns.find((t) => t.kind === 'city') ?? app.gen.towns[0];
       return { s: city.s, z: city.z - city.halfLen - 400, yaw: 0 };
     }
-    return app.hatch.doorstep(4.5);
+    return app.hatch.doorstep(7);
   }
 
   persist() {

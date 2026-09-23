@@ -84,7 +84,7 @@ export class Hatch {
     mb.box(-DOOR_W, 0.06, 2.7, DOOR_W, DOOR_H, D, PANEL, SURF.plain, SURF.plain, 0.2);
     mb.box(-0.6, 0.06, 2.62, 0.6, 2.25, 2.7, STEEL, SURF.plain, SURF.plain, 0.2);
     // apron slab and the retaining wing walls that hold back the berm
-    mb.box(-W + 0.4, -0.5, -6.5, W - 0.4, 0.07, 0, CONCRETE_DARK, SURF.plain, SURF.plain, 0.25);
+    mb.box(-W + 0.4, -0.5, -4.2, W - 0.4, 0.07, 0, CONCRETE_DARK, SURF.plain, SURF.plain, 0.25);
     for (const sx of [-1, 1]) {
       const x0 = sx * W;
       const x1 = sx * (W + 6.2);
