@@ -2,6 +2,39 @@
 
 A browser-based, real-time three.js world where the player explores the Heaven's River topopolis (Bobiverse Book 4, Dennis E. Taylor) as a Quinlan. Visual and mood reference: https://valley.mengto.here.now/ ("Sakura River Valley": a real-time 3D mountain river valley at golden hour). Match its feel: atmospheric haze, warm low-angle light, a river as the visual spine, small handcrafted settlements, cinematic but performant.
 
+## Running the explorer
+
+This repository contains the spec below **and** its implementation (TypeScript, three.js, Vite; no backend, no downloaded assets: every model, texture and sound is generated in code).
+
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # type-check, then a static site in dist/ (deployable anywhere)
+npm run preview    # serve the production build
+```
+
+A first visit plays the one-minute arrival sequence (skippable with Enter, Space, Escape or a tap) and hands over at a hillside maintenance hatch above the first river city at golden hour. Progress autosaves to `localStorage`; *Reset saved game* in the menu starts over. Add `?nointro` to the URL to untick the intro by default.
+
+| Keyboard / mouse | Action |
+|---|---|
+| WASD or arrows, mouse | Move, look (click the view to capture the mouse) |
+| Shift / Ctrl | Drop to all fours and run / walk slowly |
+| Space / C | Jump, surface / dive when swimming |
+| E | Interact: signposts, docks (hire a barge), murals, plaques, barrier tunnels |
+| V | Quinlan vision: 270° panorama → independent eyes → normal |
+| Q / E held + mouse | Steer the left / right eye in independent-eyes mode (tap to re-centre) |
+| B | Bob mode: switch the hologram sky off and see the far side of the world |
+| M / J | Map (float, travel or set a destination) / journal |
+| T, Shift+T | Scrub the time of day forwards / backwards |
+| Tab | Photo mode: free camera, depth of field, poses; Enter saves a PNG |
+| Enter | Arrive now, while on a barge |
+| H, F3 | Hide the hints, developer panel |
+| Esc | Menu and settings |
+
+Gamepad: left stick move, right stick look, A jump, B dive, LB/RB hold to steer each eye, click the left stick or hold LT to run, X interact, Y vision, Back map, Start menu, D-pad up Bob mode, D-pad down photo mode. On phones and tablets, drag on the left half to move and on the right half to look, and use the on-screen buttons.
+
+How the code is organised, and the decisions taken on the spec's open questions, are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This is a non-commercial fan project set in Dennis E. Taylor's *Bobiverse*; it is not affiliated with the author or his publishers.
+
 ---
 
 ## 1. Source canon (what the books and author actually say)
