@@ -5,7 +5,7 @@
 // the deck, look around, switch on Quinlan vision or Bob mode, or jump
 // overboard (which ends the ride mid-river).
 
-import { BufferAttribute, BufferGeometry, Group, Matrix4, Mesh } from 'three';
+import { BufferAttribute, BufferGeometry, Color, DynamicDrawUsage, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh, Quaternion, Vector3 } from 'three';
 import { frame, wrapS } from '../coords/cylinder';
 import { clamp, damp, lerp, mod, smoothstep } from '../core/math';
 import { MeshBuilder } from '../towns/meshBuilder';
@@ -14,6 +14,8 @@ import { createTownMaterial } from '../towns/townMaterial';
 import type { TownSite } from '../world/gen/settlements';
 import type { MainRiver } from '../world/gen/rivers';
 import type { InputFrame } from '../player/input';
+import { createQuinlanGeometry, createQuinlanInstancedGeometry, quinlanFurPalette, QUINLAN_GAIT } from '../npc/quinlanModel';
+import { quinlanDepthMaterial, quinlanWorldMaterial } from '../npc/quinlanMaterials';
 
 const BARGE_LEN = 17;
 
@@ -71,6 +73,8 @@ export class BargeJourney {
   private sideTo = 1;
   private arriveBtn: HTMLButtonElement;
   private skipping = false;
+  private crew: InstancedMesh;
+  private crewAnim: InstancedBufferAttribute;
 
   constructor(host: BargeHost, overlay: HTMLElement) {
     this.host = host;
@@ -97,6 +101,22 @@ export class BargeJourney {
     this.mesh.matrixAutoUpdate = false;
     this.mesh.matrixWorldAutoUpdate = false;
     this.group.add(this.mesh);
+    // the crew: two singers facing each other, a steersman, a passenger at the bow
+    const cg = createQuinlanInstancedGeometry(createQuinlanGeometry('high'), CREW.length);
+    this.crew = new InstancedMesh(cg, quinlanWorldMaterial(), CREW.length);
+    this.crew.customDepthMaterial = quinlanDepthMaterial();
+    this.crew.castShadow = true;
+    this.crew.frustumCulled = false;
+    this.crew.matrixAutoUpdate = false;
+    this.crew.matrixWorldAutoUpdate = false;
+    this.crew.matrixWorld.identity();
+    this.crew.instanceMatrix.setUsage(DynamicDrawUsage);
+    this.crewAnim = cg.getAttribute('aAnim') as InstancedBufferAttribute;
+    CREW.forEach((c, i) => {
+      this.crew.setColorAt(i, quinlanFurPalette(c.variant, new Color()));
+      this.crewAnim.setXYZW(i, c.gait, i * 0.37, 1, c.variant);
+    });
+    this.group.add(this.crew);
     this.group.visible = false;
     this.arriveBtn = document.createElement('button');
     this.arriveBtn.className = 'btn arrive-now';
@@ -137,8 +157,9 @@ export class BargeJourney {
     this.planProfile();
     this.t = 0;
     this.passed.clear();
-    this.localX = 0;
-    this.localZ = 2.5;
+    // start forward of the singers, looking over the bow
+    this.localX = -0.5;
+    this.localZ = -BARGE_LEN * 0.2;
     this.active = true;
     this.skipping = false;
     this.group.visible = true;
@@ -359,6 +380,7 @@ export class BargeJourney {
     _r.makeRotationZ(roll);
     this.mesh.matrixWorld.copy(m).multiply(_r);
     this.mesh.matrixWorldNeedsUpdate = false;
+    this.placeCrew(this.h + 0.55 + Math.sin(this.bob * 1.3) * 0.04);
     if (this.t >= this.duration) this.finish(true);
     return { s: this.s + wx, z: this.z + wz, h: this.h + 0.55, yawDelta, overboard };
   }
@@ -400,6 +422,36 @@ export class BargeJourney {
     if (!this.group.visible || this.active) return;
     const m = frame.rigidMatrix(this.s, this.z, this.h, this.yaw, _m);
     this.mesh.matrixWorld.copy(m);
+    this.placeCrew(this.h + 0.55);
+  }
+
+  /** Crew poses in world space (bent Quinlan instances anchored at the frame origin). */
+  private placeCrew(deck: number) {
+    const c = Math.cos(this.yaw);
+    const sn = Math.sin(this.yaw);
+    const poling = this.active && !this.downstream;
+    CREW.forEach((m, i) => {
+      let lx = m.x;
+      let lz = m.z;
+      let gait: number = m.gait;
+      if (poling && i === 2) {
+        // upstream: the steersman walks the side deck, poling
+        const ph = (this.bob * 0.12) % 1;
+        const tri = ph < 0.5 ? ph * 2 : 2 - ph * 2;
+        lx = BARGE_LEN * 0.15 - 0.35;
+        lz = -BARGE_LEN * 0.3 + tri * BARGE_LEN * 0.5;
+        gait = QUINLAN_GAIT.walk;
+      }
+      const wx = lx * c + lz * sn;
+      const wz = -lx * sn + lz * c;
+      _q.setFromAxisAngle(_up, this.yaw + m.yaw + (poling && i === 2 ? (((this.bob * 0.12) % 1) < 0.5 ? Math.PI : 0) : 0));
+      _p.set(wrapS(this.s + wx - frame.originS), deck, this.z + wz - frame.originZ);
+      _mc.compose(_p, _q, _one);
+      this.crew.setMatrixAt(i, _mc);
+      this.crewAnim.setX(i, gait);
+    });
+    this.crew.instanceMatrix.needsUpdate = true;
+    this.crewAnim.needsUpdate = true;
   }
 
   get progress() {
@@ -413,3 +465,16 @@ export class BargeJourney {
 
 const _m = new Matrix4();
 const _r = new Matrix4();
+const _mc = new Matrix4();
+const _q = new Quaternion();
+const _p = new Vector3();
+const _one = new Vector3(1, 1, 1);
+const _up = new Vector3(0, 1, 0);
+
+/** Crew stations in barge-local metres (bow at -z); yaw relative to the barge. */
+const CREW: { x: number; z: number; yaw: number; gait: number; variant: number }[] = [
+  { x: -1.15, z: 1.3, yaw: -Math.PI / 2, gait: QUINLAN_GAIT.sing, variant: 311 },
+  { x: 1.15, z: 1.0, yaw: Math.PI / 2, gait: QUINLAN_GAIT.sing, variant: 5120 },
+  { x: 0.2, z: BARGE_LEN * 0.22, yaw: 0, gait: QUINLAN_GAIT.idle, variant: 77 },
+  { x: 1.1, z: -BARGE_LEN * 0.38, yaw: -Math.PI / 2, gait: QUINLAN_GAIT.idle, variant: 9021 },
+];

@@ -105,7 +105,7 @@ void main() {
   vec3 r = reflect(-V, n);
   vec3 rl = vec3(c * r.x + s * r.y, -s * r.x + c * r.y, r.z);
   rl.y = max(rl.y, 0.02);
-  vec3 refl = hrHoloSky(normalize(rl));
+  vec3 refl = hrHoloSkyRefl(normalize(rl));
   // water body
   float cosV = max(dot(V, up), 0.08);
   float path = max(vDepth, 0.0) / cosV;

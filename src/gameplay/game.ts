@@ -13,6 +13,9 @@ import { PhotoMode } from './photo';
 import { AudioBridge } from './audioBridge';
 import { IntroSequence } from '../intro/intro';
 import { glyphImage } from '../ui/glyphs';
+import { TouchControls } from '../ui/touchControls';
+import { DebugPanel } from '../ui/debugPanel';
+import { describeMural } from '../ui/murals';
 import { Hud, type CompassMarker } from '../ui/hud';
 import { MapScreen } from '../ui/mapScreen';
 import { Menu } from '../ui/menu';
@@ -35,6 +38,9 @@ export class Game {
   readonly audio: AudioBridge;
   private intro: IntroSequence | null = null;
   private lookHint: HTMLDivElement;
+  private touch: TouchControls;
+  private debug = new DebugPanel(this);
+  private promptText = '';
   private photoReturn: GameState = 'explore';
   private visionBeforePhoto: 'off' | 'panorama' | 'split' = 'off';
   save: SaveData;
@@ -129,6 +135,13 @@ export class Game {
     app.scene.add(this.barge.group);
     this.photo = new PhotoMode(app, this.overlay);
     this.audio = new AudioBridge(app);
+    this.touch = new TouchControls(this.overlay, app.input);
+    if (app.input.touchActive) this.hud.useTouchHints();
+    this.touch.context = {
+      interact: () => this.promptText !== '',
+      swimming: () => this.state === 'photo' || app.player.mode === 'swim' || app.player.mode === 'dive' || app.player.mode === 'fly',
+      playing: () => this.state === 'explore' || this.state === 'barge' || this.state === 'photo',
+    };
     this.lookHint = document.createElement('div');
     this.lookHint.className = 'look-hint';
     this.lookHint.textContent = 'Click to look around';
@@ -149,8 +162,8 @@ export class Game {
     this.pickSpawn();
     this.installTownInteractions();
     this.interactions.push({
-      test: () => (app.hatch.active && app.hatch.distance(app.player.s, app.player.z) < 3.2 ? 'Read the plaque' : null),
-      run: () => this.hud.toast('MAINTENANCE 07 — crew access only, by order of Anek. The hatch is sealed behind you.'),
+      test: () => (app.hatch.active && app.hatch.distance(app.player.s, app.player.z) < 3.2 ? '<span class="key">E</span>Read the plaque' : null),
+      run: () => this.hud.showCard('Maintenance 07', 'Crew access only, by order of Anek. The doors have sealed behind you; somewhere below, the machinery of the world hums on.', 8),
     });
     app.terrain.pool.onMap = (d) => this.map.setData(d);
     app.terrain.pool.requestMap(840, 520);
@@ -186,6 +199,29 @@ export class Game {
     this.interactions.push({
       test: () => (near('dock', 18) ? '<span class="key">E</span>Hire a barge — choose where to float' : null),
       run: () => this.openMap(),
+    });
+    // painted walls
+    const nearMural = () => {
+      const p = app.player;
+      for (const t of app.towns.loadedTowns()) {
+        const m = t.murals;
+        const lx = wrapS(p.s - t.anchorS);
+        const lz = p.z - t.anchorZ;
+        for (let i = 0; i < m.length; i += 5) {
+          if (Math.abs(lx - m[i]) > m[i + 3] || Math.abs(lz - m[i + 1]) > m[i + 3]) continue;
+          if (Math.hypot(lx - m[i], lz - m[i + 1]) < m[i + 3] && Math.abs(p.h - m[i + 2]) < 3) return { town: t, seed: m[i + 4] };
+        }
+      }
+      return null;
+    };
+    this.interactions.push({
+      test: () => (nearMural() ? '<span class="key">E</span>Look at the mural' : null),
+      run: () => {
+        const m = nearMural();
+        if (!m) return;
+        const d = describeMural(m.seed, m.town.site.name);
+        this.hud.showCard(d.title, d.text, 11);
+      },
     });
     // barrier tunnel portals lead to the neighbouring sections
     this.interactions.push({
@@ -254,7 +290,7 @@ export class Game {
     // first visit: a hillside overlooking a river city at golden hour
     const spot = this.heroSpot();
     app.spawn(spot.s, spot.z, spot.yaw);
-    app.player.pitch = -0.05;
+    app.player.pitch = -0.02;
     app.timeOfDay = 0.69;
   }
 
@@ -268,7 +304,7 @@ export class Game {
       const city = app.gen.towns.find((t) => t.kind === 'city') ?? app.gen.towns[0];
       return { s: city.s, z: city.z - city.halfLen - 400, yaw: 0 };
     }
-    return app.hatch.doorstep(2.2);
+    return app.hatch.doorstep(4.5);
   }
 
   persist() {
@@ -356,8 +392,8 @@ export class Game {
     const p = this.app.player;
     p.mode = 'ride';
     p.vs = p.vz = p.vh = 0;
-    p.yaw = this.barge.yaw + Math.PI * 0.85;
-    p.pitch = -0.05;
+    p.yaw = this.barge.yaw;
+    p.pitch = -0.04;
     this.state = 'barge';
     this.app.paused = false;
     this.save.stats.trips++;
@@ -398,6 +434,12 @@ export class Game {
     this.app.input.exitLock();
     this.audio.engine.whoosh();
     this.travel.travelTo(t, { s: this.app.player.s, z: this.app.player.z });
+  }
+
+  /** Travel to a settlement of this section by id (debug panel). */
+  travelToId(id: number) {
+    const t = this.app.gen.towns.find((x) => x.id === id);
+    if (t && (this.state === 'explore' || this.state === 'menu')) this.travelTo(t);
   }
 
   setDestination(t: TownSite) {
@@ -557,6 +599,8 @@ export class Game {
       this.hud.toast(p.mode === 'fly' ? 'Fly mode (debug): Space up, C down, Shift fast' : 'Walking');
     });
     inp.on('KeyH', () => this.state !== 'photo' && this.hud.toggleHints());
+    inp.on('F3', () => this.debug.toggle());
+    inp.on('Backquote', () => this.debug.toggle());
     inp.on('Tab', () => {
       if (this.state === 'photo') this.exitPhoto();
       else if (this.state === 'explore' || this.state === 'barge') this.enterPhoto();
@@ -688,6 +732,7 @@ export class Game {
     });
     this.lookHint.style.opacity = this.state === 'explore' && !app.input.locked && !app.input.touchActive && !app.testMode ? '1' : '0';
     this.steerEyes();
+    this.touch.update();
     if (this.state === 'photo') this.photo.update(dt);
     if (this.state === 'barge' && this.barge.active) {
       const p = app.player;
@@ -790,6 +835,7 @@ export class Game {
       }
     }
     this.hud.setPrompt(prompt);
+    this.promptText = prompt;
     this.hud.setVisible(this.state !== 'photo' && this.state !== 'intro' && this.state !== 'cutscene' && this.state !== 'boot');
   }
 
@@ -867,9 +913,9 @@ export class Game {
     app.input.enabled = false;
     // stand in the hatch doorway at golden hour so the world loads during the intro
     const spot = this.heroSpot();
-    const inDoor = app.hatch.active ? app.hatch.doorstep(0.6) : spot;
+    const inDoor = app.hatch.active ? app.hatch.doorstep(1.6) : spot;
     app.spawn(inDoor.s, inDoor.z, inDoor.yaw);
-    app.player.pitch = -0.04;
+    app.player.pitch = -0.02;
     app.timeOfDay = 0.69;
     app.hatch.open = app.hatch.openTarget = 1;
     const e = this.audio.engine;

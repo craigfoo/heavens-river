@@ -42,6 +42,8 @@ export class Hud {
   private breath: HTMLCanvasElement;
   private toasts: HTMLDivElement;
   private hints: HTMLDivElement;
+  private card: HTMLDivElement | null = null;
+  private cardTimer = 0;
   readonly fade: HTMLDivElement;
   private bannerTimer = 0;
   private lastSection = -1;
@@ -85,6 +87,14 @@ export class Hud {
     this.root.classList.toggle('hidden-soft', !v);
   }
 
+  /** Swap the keyboard hints for touch ones (phones/tablets). */
+  useTouchHints() {
+    this.hints.innerHTML =
+      '<b>Left side</b> drag to move · <b>Right side</b> drag to look<br>' +
+      '<b>Run</b> all fours · <b>Jump</b> jump / surface · <b>Eyes</b> Quinlan vision · <b>Sky</b> Bob mode';
+    this.hints.classList.add('touch');
+  }
+
   hideHintsSoon() {
     setTimeout(() => (this.hints.style.opacity = '0'), 20000);
   }
@@ -125,6 +135,23 @@ export class Hud {
     s.textContent = sub;
     this.banner.classList.add('show');
     this.bannerTimer = seconds;
+  }
+
+  /** A short reading card (murals, plaques) that fades by itself. */
+  showCard(title: string, text: string, seconds = 10) {
+    if (!this.card) {
+      this.card = el('div', 'read-card', this.root);
+    }
+    this.card.innerHTML = '';
+    el('div', 'rc-title', this.card).textContent = title;
+    el('div', 'rc-text', this.card).textContent = text;
+    this.card.classList.add('show');
+    clearTimeout(this.cardTimer);
+    this.cardTimer = window.setTimeout(() => this.card?.classList.remove('show'), seconds * 1000);
+  }
+
+  hideCard() {
+    this.card?.classList.remove('show');
   }
 
   setPrompt(text: string) {

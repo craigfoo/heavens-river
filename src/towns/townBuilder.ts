@@ -69,6 +69,8 @@ export interface TownResult {
   waypoints: Float32Array;
   /** Statue/rooftop perches for surveillance birds: (ds, dz, h). */
   perches: Float32Array;
+  /** Painted buildings: (ds, dz, h, reach radius, seed). */
+  murals: Float32Array;
   poi: TownPoi;
   buildingCount: number;
   genMs: number;
@@ -217,6 +219,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
   const floors: number[] = [];
   const waypoints: number[] = [];
   const perches: number[] = [];
+  const murals: number[] = [];
   let poi: TownPoi | null = null;
 
   for (const B of layout.banks) {
@@ -262,6 +265,10 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
       });
       // collider footprint (slightly inset so doors feel reachable)
       if (b.kind !== 'boathouse') addBox(colliders, map, b.a, b.c, b.w + (b.kind === 'civic' ? 4 : 0.4), b.d + (b.kind === 'civic' ? 7 : 0.4), b.rot, ground(b.a, b.c) - 1, ground(b.a, b.c) + b.floors * FLOOR_H + 3);
+      if (b.mural) {
+        const p = map.pos(b.a, ground(b.a, b.c), b.c);
+        murals.push(p[0], p[2], p[1], Math.max(b.w, b.d) * 0.5 + 3.5, b.seed % 100000);
+      }
       // bird perches on ridges
       if (rng.chance(0.08)) {
         const p = map.pos(b.a, ground(b.a, b.c) + b.floors * FLOOR_H + 2.4 + (b.roof === 'thatch' ? 1.4 : 1.0), b.c);
@@ -498,6 +505,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     floors: new Float32Array(floors),
     waypoints: new Float32Array(waypoints),
     perches: new Float32Array(perches),
+    murals: new Float32Array(murals),
     poi: poi ?? { dock: [0, 0, site.level, 0], signpost: [0, 0, site.level], market: [0, 0, site.level], gate: [0, 0, site.level, 0] },
     buildingCount: layout.buildingCount,
     genMs: performance.now() - t0,
@@ -559,7 +567,7 @@ function addFloor(out: number[], map: Mapper, a0: number, a1: number, c0: number
 }
 
 export function townTransferables(r: TownResult): Transferable[] {
-  const t: Transferable[] = [r.colliders.buffer, r.floors.buffer, r.waypoints.buffer, r.perches.buffer];
+  const t: Transferable[] = [r.colliders.buffer, r.floors.buffer, r.waypoints.buffer, r.perches.buffer, r.murals.buffer];
   const seen = new Set<ArrayBufferLike>();
   for (const tile of r.tiles)
     for (const m of [tile.near, tile.far])

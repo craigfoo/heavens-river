@@ -19,6 +19,15 @@ export interface InputFrame {
   eyeDY: number;
 }
 
+const PAD_TAPS: [number, string][] = [
+  [9, 'Escape'],
+  [8, 'KeyM'],
+  [3, 'KeyV'],
+  [2, 'KeyE'],
+  [12, 'KeyB'],
+  [13, 'Tab'],
+];
+
 const IDLE: InputFrame = { moveX: 0, moveY: 0, lookX: 0, lookY: 0, quad: false, walkSlow: false, jump: false, jumpPressed: false, dive: false, burst: false, eyeL: 0, eyeR: 0, eyeDX: 0, eyeDY: 0 };
 
 export class Input {
@@ -40,6 +49,7 @@ export class Input {
   private touchLook = { id: -1, x: 0, y: 0 };
   touchActive = false;
   private touchJump = false;
+  private padPrev: boolean[] = [];
   /** Most recent polled frame (for systems updated after the player). */
   last: InputFrame = { ...IDLE };
 
@@ -51,7 +61,7 @@ export class Input {
       this.keys.add(e.code);
       this.pressed.add(e.code);
       for (const h of this.handlers.get(e.code) ?? []) h(e);
-      if (['Tab', 'Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
+      if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'F3'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => {
       if (!this.keys.has(e.code)) return;
@@ -68,6 +78,12 @@ export class Input {
       this.mouseDY += e.movementY;
     });
     this.setupTouch();
+    // phones and tablets: show the on-screen controls from the start
+    try {
+      this.touchActive = window.matchMedia('(pointer: coarse)').matches && 'ontouchstart' in window;
+    } catch {
+      this.touchActive = false;
+    }
   }
 
   /** Register a key handler (fires on keydown). */
@@ -75,6 +91,22 @@ export class Input {
     const list = this.handlers.get(code) ?? [];
     list.push(fn);
     this.handlers.set(code, list);
+  }
+
+  /** Press a key from an on-screen button (fires the same handlers as the keyboard). */
+  virtualDown(code: string) {
+    if (this.keys.has(code)) return;
+    this.keys.add(code);
+    this.pressed.add(code);
+    const ev = new KeyboardEvent('keydown', { code });
+    for (const h of this.handlers.get(code) ?? []) h(ev);
+  }
+
+  virtualUp(code: string) {
+    if (!this.keys.has(code)) return;
+    this.keys.delete(code);
+    const ev = new KeyboardEvent('keyup', { code });
+    for (const h of this.upHandlers.get(code) ?? []) h(ev);
   }
 
   /** Register a key-release handler. */
@@ -197,6 +229,15 @@ export class Input {
       if (p.buttons[10]?.pressed || p.buttons[6]?.pressed) quad = true;
       if (p.buttons[4]?.pressed) eyeL = 1;
       if (p.buttons[5]?.pressed) eyeR = 1;
+      // face/d-pad buttons act as key taps: Start menu, Back map, Y vision, X use, up sky, down photo
+      for (const [b, code] of PAD_TAPS) {
+        const on = !!p.buttons[b]?.pressed;
+        if (on && !this.padPrev[b]) {
+          this.virtualDown(code);
+          this.virtualUp(code);
+        }
+        this.padPrev[b] = on;
+      }
     }
     const len = Math.hypot(mx, my);
     if (len > 1) {

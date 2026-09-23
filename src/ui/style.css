@@ -172,3 +172,26 @@ body.touch .touch-buttons { display: flex; }
 .title-screen .tt-opt input { accent-color: var(--accent); vertical-align: -2px; margin-right: 6px; }
 .title-screen .tt-credit { margin-top: 42px; font: 12px/1.5 var(--sans); color: rgba(244, 234, 216, 0.5); }
 .look-hint { position: absolute; left: 50%; top: 66%; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); font: 500 13px var(--sans); letter-spacing: .06em; color: var(--ink); pointer-events: none; opacity: 0; transition: opacity .5s; }
+
+/* ---------------------------------------------------------------- touch controls */
+.touch-ui { position: absolute; inset: 0; pointer-events: none; }
+.tstick-base, .tstick-knob { position: absolute; left: 0; top: 0; border-radius: 50%; opacity: 0; transition: opacity .15s; }
+.tstick-base { width: 120px; height: 120px; border: 2px solid rgba(244, 234, 216, .35); background: rgba(18, 16, 22, .18); }
+.tstick-knob { width: 52px; height: 52px; background: rgba(244, 234, 216, .45); box-shadow: 0 0 12px rgba(0,0,0,.3); }
+.touch-ui .tbtn { position: absolute; pointer-events: auto; border-radius: 50%; border: 1px solid rgba(244, 234, 216, .35); background: rgba(18, 16, 22, .45); color: var(--ink); font: 600 12px var(--sans); letter-spacing: .04em; width: 58px; height: 58px; padding: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
+.touch-ui .tbtn.on { background: rgba(232, 180, 96, .55); }
+.touch-ui .b-jump { right: 28px; bottom: 34px; width: 78px; height: 78px; font-size: 14px; }
+.touch-ui .b-dive { right: 118px; bottom: 24px; }
+.touch-ui .b-run { right: 116px; bottom: 96px; }
+.touch-ui .b-use { right: 40px; bottom: 126px; background: rgba(232, 180, 96, .4); }
+.touch-ui .b-map, .touch-ui .b-eyes, .touch-ui .b-sky, .touch-ui .b-photo { width: 46px; height: 46px; font-size: 10px; top: 76px; }
+.touch-ui .b-map { right: 16px; }
+.touch-ui .b-eyes { right: 68px; }
+.touch-ui .b-sky { right: 120px; }
+.touch-ui .b-photo { right: 172px; }
+.touch-ui .b-menu { right: 16px; top: 128px; width: 46px; height: 46px; font-size: 18px; }
+.hud .hints.touch { bottom: auto; top: 76px; left: 16px; max-width: 46vw; }
+.read-card { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); max-width: min(520px, 86vw); padding: 14px 20px 16px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 12px; opacity: 0; transition: opacity .6s; text-align: center; }
+.read-card.show { opacity: 1; }
+.read-card .rc-title { font: 600 22px/1.2 var(--serif); letter-spacing: .03em; color: #f6e7c8; margin-bottom: 6px; }
+.read-card .rc-text { font: 400 14px/1.55 var(--sans); color: var(--ink-dim); }

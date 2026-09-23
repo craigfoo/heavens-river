@@ -168,7 +168,58 @@ export class WorldGen {
           list.push(site);
         }
     }
+    this.heroHill = this.planHeroHill();
     this.hatch = this.findHatch();
+  }
+
+  /**
+   * Hand-shaped "hero" hill beside the first river city: a smooth grassy
+   * promontory whose city-facing slope carries the arrival hatch, so the first
+   * view looks down across the roofs to the river.
+   */
+  heroHill: { s: number; z: number; H: number; sigma: number; rot: number; aspect: number } | null = null;
+
+  private planHeroHill() {
+    const city = this.towns.find((t) => t.kind === 'city');
+    if (!city) return null;
+    const rng = new Rng(seedFor(this.seed, 'herohill'));
+    const smp = newSample();
+    const sigma = 480;
+    const tries: { a: number; c: number; side: 1 | -1 }[] = [];
+    for (const side of [city.side, -city.side as 1 | -1])
+      for (const cOff of [900, 1250, 1600])
+        for (const aF of [0.45, -0.45, 0.8, -0.8, 0]) tries.push({ a: city.halfLen * aF, c: city.depthInland + cOff, side });
+    for (const t of tries) {
+      const p = city.toWorld(t.a, t.c, t.side);
+      if (p.z < 30_000 || p.z > L - 30_000) continue;
+      // the footprint must be dry, open country
+      let ok = true;
+      for (let k = 0; k < 16 && ok; k++) {
+        const ang = (k / 16) * Math.PI * 2;
+        for (const r of [0, sigma * 0.8, sigma * 1.6]) {
+          const o = this.sample(p.s + Math.sin(ang) * r, p.z + Math.cos(ang) * r, 0, smp);
+          if (o.water > o.h - 1.5 || o.town > 0.02 || o.edge < 150) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (!ok) continue;
+      return { s: p.s, z: p.z, H: rng.range(80, 105), sigma, rot: rng.range(0, Math.PI), aspect: rng.range(1.2, 1.6) };
+    }
+    return null;
+  }
+
+  private heroBump(s: number, z: number): number {
+    const hh = this.heroHill!;
+    const ds = wrapDs(s - hh.s);
+    const dz = z - hh.z;
+    if (Math.abs(ds) > hh.sigma * 4 || Math.abs(dz) > hh.sigma * 4) return 0;
+    const c = Math.cos(hh.rot);
+    const sn = Math.sin(hh.rot);
+    const x = (ds * c - dz * sn) / (hh.sigma * hh.aspect);
+    const y = (ds * sn + dz * c) / hh.sigma;
+    return hh.H * Math.exp(-(x * x + y * y));
   }
 
   /** Maintenance hatch set into a hillside overlooking the first river city (the arrival point). */
@@ -179,6 +230,36 @@ export class WorldGen {
     if (!city) return null;
     const smp = newSample();
     const target = { s: city.s, z: city.z, h: city.level + 12 };
+    const hh = this.heroHill;
+    if (hh) {
+      // on the hero hill's flank facing the city, about 60% of the way up
+      const toS = wrapDs(city.s - hh.s);
+      const toZ = city.z - hh.z;
+      const base = Math.atan2(toS, toZ);
+      let pick: { s: number; z: number; score: number } | null = null;
+      for (const off of [0, 0.25, -0.25, 0.5, -0.5]) {
+        const ang = base + off;
+        // walk out from the top until the bump falls to ~60% of the peak
+        let r = 0;
+        while (r < hh.sigma * 3 && this.heroBump(hh.s + Math.sin(ang) * r, hh.z + Math.cos(ang) * r) > hh.H * 0.62) r += 10;
+        const s = hh.s + Math.sin(ang) * r;
+        const z = hh.z + Math.cos(ang) * r;
+        const o = this.sample(s, z, 0, smp);
+        let blocked = 0;
+        for (let i = 1; i < 24; i++) {
+          const f = i / 24;
+          const lh = o.h + 1.2 + (target.h - o.h - 1.2) * f;
+          if (this.heightAt(s + wrapDs(target.s - s) * f, z + (target.z - z) * f) > lh - 1.5) blocked++;
+        }
+        const score = -blocked * 10 - Math.abs(off) * 4;
+        if (!pick || score > pick.score) pick = { s, z, score };
+      }
+      if (pick) {
+        const dS = wrapDs(city.s - pick.s);
+        const dZ = city.z - pick.z;
+        return { s: pick.s, z: pick.z, yaw: Math.atan2(-dS, -dZ), base: this.heightAt(pick.s, pick.z), city: city.id };
+      }
+    }
     let best: { s: number; z: number; yaw: number; score: number } | null = null;
     for (let ring = 0; ring < 7; ring++) {
       const dist = 1100 + ring * 700;
@@ -244,7 +325,7 @@ export class WorldGen {
     const wA = (1 - smoothstep(5, 9, v)) * smoothstep(-1.0, 0.3, u) * (1 - smoothstep(9, 18, u));
     h = lerp(h, b - 0.04, wA);
     // trodden gravel instead of grass right in front of the door
-    o.town = Math.max(o.town, wA * (1 - smoothstep(3, 9, u)) * (1 - smoothstep(4, 7, v)));
+    o.town = Math.max(o.town, wA * (1 - smoothstep(2.0, 5.0, u)) * (1 - smoothstep(3.2, 4.8, v)));
     // hollow under the block (its walls hide the transition)
     const wDip = (1 - smoothstep(HATCH.halfW - 1.9, HATCH.halfW - 1.1, v)) * (1 - smoothstep(HATCH.depth - 1.2, HATCH.depth - 0.6, -u)) * (1 - smoothstep(0.1, 0.6, u));
     h = lerp(h, b - 0.5, wDip);
@@ -485,6 +566,13 @@ export class WorldGen {
   sample(s: number, z: number, minWl: number, o: TerrainSample, ctx?: RegionCtx): TerrainSample {
     s = ((s % CIRC) + CIRC) % CIRC;
     this.mainSurface(s, z, minWl, o);
+    let heroK = 0;
+    if (this.heroHill) {
+      const b = this.heroBump(s, z);
+      o.h += b;
+      heroK = b / this.heroHill.H;
+      o.hill = Math.max(o.hill, heroK * 0.5);
+    }
     let h = o.h;
     const tribs = ctx ? ctx.tribs : this.adhocTribs(s, z);
     const coarse = ctx ? ctx.coarse : false;
@@ -546,6 +634,13 @@ export class WorldGen {
     }
     o.h = h;
     this.biomeMasks(s, z, o);
+    // keep the hero hill open grassland so the view stays clear
+    if (heroK > 0.02) {
+      const k = 1 - smoothstep(0.05, 0.35, heroK);
+      o.forest *= k;
+      o.farm *= k;
+      o.orchard *= 0.4 + 0.6 * k;
+    }
     if (this.hatch) o.h = this.hatchTerrain(s, z, o.h, o);
     return o;
   }

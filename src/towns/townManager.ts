@@ -28,6 +28,7 @@ export interface LoadedTown {
   floors: Float32Array;
   waypoints: Float32Array;
   perches: Float32Array;
+  murals: Float32Array;
   poi: TownPoi;
   colGrid: Map<number, number[]>;
   floorGrid: Map<number, number[]>;
@@ -207,6 +208,7 @@ export class TownManager implements Collider {
       floors: r.floors,
       waypoints: r.waypoints,
       perches: r.perches,
+      murals: r.murals,
       poi: r.poi,
       colGrid,
       floorGrid,

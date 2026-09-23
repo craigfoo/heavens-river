@@ -131,6 +131,15 @@ float hrClouds(vec2 p) {
   }
   return s;
 }
+// faint galactic band only (for reflections, where point stars would alias)
+vec3 hrStarBand(vec3 v) {
+  float c = cos(uStarRot);
+  float s = sin(uStarRot);
+  v = vec3(c * v.x - s * v.z, v.y, s * v.x + c * v.z);
+  float bd = dot(v, normalize(vec3(0.3, 0.2, 0.93))) * 5.0;
+  float band = exp(-bd * bd);
+  return vec3(0.08, 0.09, 0.14) * band * (0.5 + hrClouds(v.xz * 9.0 + v.y * 3.0));
+}
 vec3 hrStars(vec3 v) {
   float c = cos(uStarRot);
   float s = sin(uStarRot);
@@ -154,7 +163,19 @@ vec3 hrStars(vec3 v) {
   return col;
 }
 
+vec3 hrHoloSkyBase(vec3 v);
 vec3 hrHoloSky(vec3 v) {
+  vec3 col = hrHoloSkyBase(v);
+  if (uNight > 0.01) col += hrStars(v) * uNight;
+  return col;
+}
+/** Hologram sky for reflections: stars reduced to a soft glow of the galactic band. */
+vec3 hrHoloSkyRefl(vec3 v) {
+  vec3 col = hrHoloSkyBase(v);
+  if (uNight > 0.01) col += hrStarBand(v) * uNight * 1.6 + vec3(0.012, 0.014, 0.022) * uNight;
+  return col;
+}
+vec3 hrHoloSkyBase(vec3 v) {
   float e = clamp(v.y, 0.0, 1.0);
   vec3 col = mix(uSkyHorizon, uSkyZenith, pow(e, 0.45));
   float mu = max(dot(v, uSunDir), 0.0);
@@ -168,7 +189,6 @@ vec3 hrHoloSky(vec3 v) {
     vec3 ccol = mix(uSkyHorizon * 0.85, vec3(1.0) * (uAmbientScatter * 0.7 + uSunGlow * 0.35 * lit), 0.7);
     col = mix(col, ccol, cover * (1.0 - 0.85 * uNight));
   }
-  if (uNight > 0.01) col += hrStars(v) * uNight;
   return col;
 }
 
