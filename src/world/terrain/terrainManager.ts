@@ -364,6 +364,18 @@ export class TerrainManager {
     this.farShell = mesh;
   }
 
+  /** Vertex arrays of a ready finest-level chunk (for grass). */
+  fineChunk(is: number, iz: number) {
+    const n = this.nodes.get(`${MAX_LEVEL}:${is}:${iz}`);
+    if (!n || !n.ready || !n.mesh) return null;
+    const g = n.mesh.geometry;
+    return {
+      pos: g.getAttribute('position').array,
+      color: g.getAttribute('aColor').array,
+      mat: g.getAttribute('aMat').array,
+    };
+  }
+
   /** True once the chunks around the camera are ready to show. */
   isSettled(cam: CameraState): boolean {
     const { cis, ciz } = this.nearBounds(cam);

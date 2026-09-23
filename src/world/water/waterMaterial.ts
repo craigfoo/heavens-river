@@ -49,14 +49,14 @@ varying float vKind;
 varying float vDist;
 ${terrainNoiseGlsl}
 
-float wHeight(vec2 p) {
-  return tNoise(p * 0.55) * 0.6 + tNoise(p * 1.7 + 3.1) * 0.28 + tNoise(p * 4.3 + 7.7) * 0.12;
+float wHeight(vec2 p, float fine) {
+  return tNoise(p * 0.16) * 0.55 + tNoise(p * 0.47 + 3.1) * 0.3 + tNoise(p * 1.35 + 7.7) * 0.15 * fine;
 }
-vec3 wNormal(vec2 p, float amp) {
-  const float e = 0.08;
-  float h0 = wHeight(p);
-  float hx = wHeight(p + vec2(e, 0.0));
-  float hz = wHeight(p + vec2(0.0, e));
+vec3 wNormal(vec2 p, float amp, float fine) {
+  const float e = 0.12;
+  float h0 = wHeight(p, fine);
+  float hx = wHeight(p + vec2(e, 0.0), fine);
+  float hz = wHeight(p + vec2(0.0, e), fine);
   return normalize(vec3(-(hx - h0) / e * amp, 1.0, -(hz - h0) / e * amp));
 }
 
@@ -71,8 +71,9 @@ void main() {
   vec2 w = hrWorldSZ(wpos, uOriginMod, 4096.0);
   bool canal = vKind > 1.5 && vKind < 2.5;
   float speed = length(vFlow);
-  float amp = canal ? 0.12 : (vKind < 0.5 ? 0.35 : 0.26);
-  amp *= 1.0 - smoothstep(60.0, 1400.0, vDist) * 0.8;
+  float amp = canal ? 0.06 : (vKind < 0.5 ? 0.16 : 0.12);
+  amp *= 1.0 - smoothstep(10.0, 400.0, vDist) * 0.8;
+  float fine = 1.0 - smoothstep(8.0, 60.0, vDist);
   // two-phase flow map
   float T = 3.0;
   float ph0 = fract(uTime / T);
@@ -81,7 +82,7 @@ void main() {
   vec2 uv0 = w - vFlow * ph0 * T;
   vec2 uv1 = w - vFlow * ph1 * T + vec2(0.37, 0.71);
   vec2 drift = vec2(uTime * 0.05, uTime * 0.035);
-  vec3 nl = normalize(mix(wNormal(uv0 + drift, amp), wNormal(uv1 - drift, amp), wgt));
+  vec3 nl = normalize(mix(wNormal(uv0 + drift, amp, fine), wNormal(uv1 - drift, amp, fine), wgt));
   // broad slow swell
   nl = normalize(nl + vec3(tNoise(w * 0.03 + uTime * 0.02) - 0.5, 0.0, tNoise(w * 0.03 + 9.0 - uTime * 0.02) - 0.5) * 0.15);
   vec3 n = vec3(c * nl.x - s * nl.y, s * nl.x + c * nl.y, nl.z);

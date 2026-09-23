@@ -69,8 +69,8 @@ export class TownSite {
       this.halfLen = rng.range(380, 650);
       this.depthInland = rng.range(260, 420);
     } else {
-      this.halfLen = rng.range(1100, 1700);
-      this.depthInland = rng.range(700, 1000);
+      this.halfLen = rng.range(760, 1050);
+      this.depthInland = rng.range(420, 600);
     }
     this.radius = Math.hypot(this.halfLen, this.depthInland + river.widthAt(z));
     this.waterLevel = river.levelAt(z);
@@ -133,8 +133,11 @@ export class TownSite {
       });
     }
     if (this.kind === 'city') {
-      const a0 = rng.range(-this.halfLen * 0.3, this.halfLen * 0.1);
-      this.basins.push({ a0, a1: a0 + rng.range(180, 280), c0: -12, c1: rng.range(90, 150) });
+      // harbour basin cut into the bank, well away from the central market
+      const sgn = rng.sign();
+      const len = rng.range(160, 240);
+      const a0 = sgn > 0 ? this.halfLen * rng.range(0.3, 0.45) : -this.halfLen * rng.range(0.3, 0.45) - len;
+      this.basins.push({ a0, a1: a0 + len, c0: -12, c1: rng.range(80, 130) });
     }
   }
 

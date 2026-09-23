@@ -92,19 +92,33 @@ function buildTreeGeometry(detail: 'high' | 'low'): BufferGeometry {
       v.multiplyScalar(k);
       pos.setXYZ(i, v.x, v.y, v.z);
     }
-    g.computeVertexNormals();
     g.translate(x, y, z);
-    parts.push({ g: g.toNonIndexed(), part: 1 });
+    const ng = g.toNonIndexed();
+    // soft, rounded foliage shading: normals from the blob and crown centres
+    const pp = ng.getAttribute('position');
+    const nn = new Float32Array(pp.count * 3);
+    for (let i = 0; i < pp.count; i++) {
+      const v = new Vector3().fromBufferAttribute(pp, i);
+      const a = v.clone().sub(new Vector3(x, y, z)).normalize();
+      const b = v.clone().sub(new Vector3(0, 6, 0)).normalize();
+      const n = a.multiplyScalar(0.45).add(b.multiplyScalar(0.55)).normalize();
+      nn[i * 3] = n.x;
+      nn[i * 3 + 1] = n.y;
+      nn[i * 3 + 2] = n.z;
+    }
+    ng.setAttribute('normal', new Float32BufferAttribute(nn, 3));
+    parts.push({ g: ng, part: 1 });
   }
   // merge
+  for (const p of parts) if (p.g.index) p.g = p.g.toNonIndexed();
   let count = 0;
-  for (const p of parts) count += (p.g.index ? p.g.toNonIndexed() : p.g).getAttribute('position').count;
+  for (const p of parts) count += p.g.getAttribute('position').count;
   const pos = new Float32Array(count * 3);
   const nrm = new Float32Array(count * 3);
   const part = new Float32Array(count);
   let o = 0;
   for (const p of parts) {
-    const g = p.g.index ? p.g.toNonIndexed() : p.g;
+    const g = p.g;
     const pa = g.getAttribute('position');
     const na = g.getAttribute('normal');
     for (let i = 0; i < pa.count; i++) {

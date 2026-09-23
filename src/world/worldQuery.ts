@@ -13,6 +13,8 @@ const MIN_WL = Math.max(DS, DZ) * 2.2;
 export interface Collider {
   /** Push (s, z) out of solid footprints; returns ground/floor height if standing on a structure. */
   resolve(s: number, z: number, h: number, radius: number, out: { s: number; z: number; floor: number }): void;
+  /** Highest walkable surface under (s, z) not above h + step, or null. */
+  floorAt?(s: number, z: number, h: number, step?: number): number | null;
 }
 
 export class WorldQuery {
@@ -72,6 +74,16 @@ export class WorldQuery {
     out.y = inv;
     out.z = -gz * inv;
     return out;
+  }
+
+  /** Walkable structure surface (piers, bridges, decks) under a point, if any. */
+  structureFloor(s: number, z: number, h: number, step = 0.6): number | null {
+    let best: number | null = null;
+    for (const c of this.colliders) {
+      const f = c.floorAt?.(s, z, h, step);
+      if (f !== null && f !== undefined && (best === null || f > best)) best = f;
+    }
+    return best;
   }
 
   /** Full sample at full detail (water level, flow, town mask...). */

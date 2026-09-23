@@ -163,7 +163,7 @@ vec3 hrHoloSky(vec3 v) {
   if (v.y > 0.02) {
     vec2 cp = v.xz / (v.y + 0.12) * 1.6 + vec2(uTime * 0.004, uTime * 0.0013);
     float cl = hrClouds(cp);
-    float cover = smoothstep(0.5, 0.78, cl) * smoothstep(0.02, 0.25, v.y);
+    float cover = smoothstep(0.6, 0.9, cl) * smoothstep(0.15, 0.45, v.y) * 0.45;
     float lit = 0.6 + 0.4 * dot(normalize(vec3(v.x, 0.3, v.z)), uSunDir);
     vec3 ccol = mix(uSkyHorizon * 0.85, vec3(1.0) * (uAmbientScatter * 0.7 + uSunGlow * 0.35 * lit), 0.7);
     col = mix(col, ccol, cover * (1.0 - 0.85 * uNight));

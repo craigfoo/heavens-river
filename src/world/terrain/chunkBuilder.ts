@@ -106,7 +106,7 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
   }
   if (o.town > 0) {
     mix3(col, C.town, o.town * 0.85, col);
-    grass *= 1 - o.town * 0.7;
+    grass *= 1 - o.town;
     farm *= 1 - o.town;
   }
   out.grass = clamp(grass, 0, 1);
@@ -246,14 +246,20 @@ export function buildChunk(gen: WorldGen, req: ChunkRequest): ChunkResult {
         const k = (j + 1) * G + (i + 1);
         let lvl = W[k];
         if (lvl < -1e8) {
-          // borrow the level of a wet neighbour so the surface stays flat to the shore
+          // borrow the level of a nearby wet vertex so the surface stays flat
+          // under the shore; otherwise sink well below ground (never climb walls)
           let best = -1e9;
-          for (let dj = -1; dj <= 1; dj++)
-            for (let di = -1; di <= 1; di++) {
-              const kk = k + dj * G + di;
-              if (W[kk] > best) best = W[kk];
+          for (let dj = -2; dj <= 2; dj++) {
+            const jj = j + 1 + dj;
+            if (jj < 0 || jj >= G) continue;
+            for (let di = -2; di <= 2; di++) {
+              const ii = i + 1 + di;
+              if (ii < 0 || ii >= G) continue;
+              const w = W[jj * G + ii];
+              if (w > best) best = w;
             }
-          lvl = best > -1e8 ? best : H[k] - 2;
+          }
+          lvl = best > -1e8 ? Math.min(best, H[k] + 0.5) : H[k] - 6;
         }
         wpos[v * 3] = position[v * 3];
         wpos[v * 3 + 1] = lvl;

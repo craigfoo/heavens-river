@@ -62,7 +62,9 @@ export interface FarShellResult {
   water: Float32Array;
 }
 
-export type WorkerRequest = ChunkRequest | InitMessage | FarShellRequest;
-export type WorkerResult = ChunkResult | FarShellResult | { type: 'ready' };
+import type { TownRequest, TownResult } from '../../towns/townBuilder';
+
+export type WorkerRequest = ChunkRequest | InitMessage | FarShellRequest | TownRequest;
+export type WorkerResult = ChunkResult | FarShellResult | TownResult | { type: 'ready' };
 
 export const TREE_STRIDE = 8;

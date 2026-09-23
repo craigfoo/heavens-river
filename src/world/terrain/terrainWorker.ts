@@ -4,6 +4,7 @@ import { CIRC, Z_MAX, Z_MIN } from '../../config';
 import { newSample, WorldGen } from '../gen/world';
 import { biomeColor, buildChunk, type BiomeOut } from './chunkBuilder';
 import type { ChunkResult, FarShellResult, WorkerRequest } from './chunkTypes';
+import { buildTown, townTransferables } from '../../towns/townBuilder';
 
 let gen: WorldGen | null = null;
 
@@ -63,6 +64,11 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   } else if (msg.type === 'chunk') {
     const res = buildChunk(gen!, msg);
     (self as unknown as Worker).postMessage(res, transferablesOf(res));
+  } else if (msg.type === 'town') {
+    const site = gen!.towns.find((s) => s.id === msg.siteId);
+    if (!site) return;
+    const res = buildTown(gen!, site);
+    (self as unknown as Worker).postMessage(res, townTransferables(res));
   } else if (msg.type === 'farshell') {
     const res = farShell(msg.ns, msg.nz);
     (self as unknown as Worker).postMessage(res, [res.height.buffer, res.color.buffer, res.water.buffer]);

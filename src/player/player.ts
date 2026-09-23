@@ -171,6 +171,8 @@ export class Player {
 
   private floorAt(world: WorldQuery): number {
     let f = world.groundHeight(this.s, this.z);
+    const sf = world.structureFloor(this.s, this.z, this.h, PLAYER.stepHeight + 0.15);
+    if (sf !== null && sf > f) f = sf;
     if (this.platform) {
       const pf = this.platform.floor(this.s, this.z);
       if (pf !== null && pf > f && this.h > pf - 0.6) f = pf;
@@ -186,6 +188,25 @@ export class Player {
     }
     let ns = this.s + this.vs * dt;
     let nz = this.z + this.vz * dt;
+    // near-vertical terrain (quay walls, cliffs) blocks movement instead of being climbed
+    const moved = Math.hypot(ns - this.s, nz - this.z);
+    if (moved > 1e-5) {
+      const gOld = world.groundHeight(this.s, this.z);
+      const gNew = world.groundHeight(ns, nz);
+      if (gNew > this.h + PLAYER.stepHeight && (gNew - Math.max(gOld, this.h)) / moved > 1.2) {
+        // try sliding along one axis
+        const gS = world.groundHeight(ns, this.z);
+        const gZ = world.groundHeight(this.s, nz);
+        if (!(gS > this.h + PLAYER.stepHeight)) nz = this.z;
+        else if (!(gZ > this.h + PLAYER.stepHeight)) ns = this.s;
+        else {
+          ns = this.s;
+          nz = this.z;
+        }
+        this.vs *= 0.5;
+        this.vz *= 0.5;
+      }
+    }
     // structures
     if (world.colliders.length) {
       const out = _col;

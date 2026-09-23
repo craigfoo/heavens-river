@@ -105,6 +105,8 @@ export interface PatchOptions {
   fragmentColor?: string;
   /** GLSL injected right before the atmosphere composite (may modify gl_FragColor). */
   fragmentEnd?: string;
+  /** Keep front-face normals on back faces (grass blades, leaves). */
+  noNormalFlip?: boolean;
   /** Unique key for program caching. */
   key: string;
 }
@@ -126,6 +128,7 @@ function injectFragment(shader: WebGLProgramParametersWithUniforms, o: PatchOpti
   const pars = `${o.atmosphere !== false ? atmosphereParsGlsl : ''}\nvarying vec3 vHrWorld;\n${o.fragmentPars ?? ''}`;
   fs = fs.replace('#include <common>', `#include <common>\n${pars}`);
   if (o.fragmentColor) fs = fs.replace('#include <color_fragment>', `#include <color_fragment>\n${o.fragmentColor}`);
+  if (o.noNormalFlip) fs = fs.replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize( vNormal );');
   const composite =
     (o.fragmentEnd ?? '') +
     (o.atmosphere !== false ? '\ngl_FragColor.rgb = hrComposite( gl_FragColor.rgb, vHrWorld, cameraPosition );\n' : '');

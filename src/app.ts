@@ -13,6 +13,8 @@ import { Player } from './player/player';
 import { WorldGen } from './world/gen/world';
 import { WorldQuery } from './world/worldQuery';
 import { TerrainManager } from './world/terrain/terrainManager';
+import { GrassField } from './world/vegetation/grass';
+import { TownManager } from './towns/townManager';
 
 export const WORLD_SEED = 0x5eed;
 
@@ -26,6 +28,8 @@ export class App {
   readonly input: Input;
   readonly player = new Player();
   terrain: TerrainManager;
+  readonly grass = new GrassField();
+  towns: TownManager;
   gen: WorldGen;
   world: WorldQuery;
   section = 0;
@@ -66,6 +70,10 @@ export class App {
     if (mobile) this.terrain.lodK = 1.6;
     this.terrain.setSection(this.section, WORLD_SEED);
     this.scene.add(this.terrain.group);
+    this.scene.add(this.grass.group);
+    this.towns = new TownManager(this.terrain.pool, this.gen);
+    this.scene.add(this.towns.group);
+    this.world.colliders.push(this.towns);
     this.scene.add(this.sky.mesh);
     this.scene.add(this.lighting.sun, this.lighting.target, this.lighting.hemi);
     this.debugText = document.createElement('div');
@@ -133,6 +141,8 @@ export class App {
     this.pipeline.grading.u('time').value = this.elapsed;
     this.pipeline.grading.u('exposure').value = this.lighting.state.exposure;
     this.terrain.update({ s: this.player.s, z: this.player.z, h: eye });
+    this.grass.update(this.player.s, this.player.z, this.terrain);
+    this.towns.update(this.player.s, this.player.z, this.camera.position);
     this.sky.update(this.camera, Z_MIN - frame.originZ, Z_MAX - frame.originZ);
     if (render) this.pipeline.render(dt);
     this.stats(dt);
@@ -150,7 +160,7 @@ export class App {
       const p = this.player;
       this.debugText.textContent =
         `${this.fps.toFixed(0)} fps  draws ${info.render.calls}  tris ${(info.render.triangles / 1e6).toFixed(2)}M\n` +
-        `chunks ${t.visible}/${t.cached} pending ${t.pending}  trees ${this.terrain.trees.count}\n` +
+        `chunks ${t.visible}/${t.cached} pending ${t.pending}  trees ${this.terrain.trees.count}  towns ${this.towns.stats.loaded} (${(this.towns.stats.tris / 1e3).toFixed(0)}k tris)\n` +
         `s ${p.s.toFixed(1)}  z ${p.z.toFixed(1)}  h ${p.h.toFixed(2)}  ${p.mode}${p.quad ? ' (quad)' : ''}\n` +
         `water ${p.waterLevel > -1e8 ? p.waterLevel.toFixed(2) : '-'}  θ ${((p.s / R) * 180 / Math.PI).toFixed(3)}°  circ ${(CIRC / 1000).toFixed(0)} km`;
     }

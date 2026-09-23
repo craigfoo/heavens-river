@@ -1,6 +1,7 @@
 // A small pool of terrain workers sharing one priority queue.
 
 import type { ChunkRequest, ChunkResult, FarShellResult, WorkerRequest, WorkerResult } from './chunkTypes';
+import type { TownResult } from '../../towns/townBuilder';
 
 interface Slot {
   worker: Worker;
@@ -16,6 +17,9 @@ export class TerrainWorkerPool {
   private inflight = new Set<string>();
   onChunk: (r: ChunkResult) => void = () => {};
   onFarShell: (r: FarShellResult) => void = () => {};
+  onTown: (r: TownResult) => void = () => {};
+  private townQueue: number[] = [];
+  private townPending = new Set<number>();
   private epoch = 0;
   private slotEpoch = new Map<Slot, number>();
   generated = 0;
@@ -41,6 +45,8 @@ export class TerrainWorkerPool {
     this.queue.length = 0;
     this.queued.clear();
     this.inflight.clear();
+    this.townQueue.length = 0;
+    this.townPending.clear();
     for (const s of this.slots) {
       s.ready = false;
       s.busy = true;
@@ -63,6 +69,9 @@ export class TerrainWorkerPool {
       if (this.slotEpoch.get(slot) === this.epoch) this.onChunk(msg);
     } else if (msg.type === 'farshell') {
       if (this.slotEpoch.get(slot) === this.epoch) this.onFarShell(msg);
+    } else if (msg.type === 'town') {
+      this.townPending.delete(msg.siteId);
+      if (this.slotEpoch.get(slot) === this.epoch) this.onTown(msg);
     }
     this.pump();
   }
@@ -94,9 +103,50 @@ export class TerrainWorkerPool {
     trySend();
   }
 
+  /** Queue a settlement build (skipped if already pending). High priority jumps the queue. */
+  requestTown(siteId: number, urgent = false) {
+    if (this.townPending.has(siteId)) {
+      if (urgent) {
+        const i = this.townQueue.indexOf(siteId);
+        if (i > 0) {
+          this.townQueue.splice(i, 1);
+          this.townQueue.unshift(siteId);
+        }
+      }
+      return;
+    }
+    this.townPending.add(siteId);
+    if (urgent) this.townQueue.unshift(siteId);
+    else this.townQueue.push(siteId);
+    this.pump();
+  }
+
+  isTownPending(siteId: number) {
+    return this.townPending.has(siteId);
+  }
+
+  /** Drop queued (not yet started) town builds that are no longer wanted. */
+  pruneTowns(keep: (id: number) => boolean) {
+    this.townQueue = this.townQueue.filter((id) => {
+      const k = keep(id);
+      if (!k) this.townPending.delete(id);
+      return k;
+    });
+  }
+
   pump() {
+    let townSlots = 0;
     for (const slot of this.slots) {
       if (!slot.ready || slot.busy) continue;
+      // at most one idle worker at a time takes town work unless chunks are idle
+      if (this.townQueue.length && (townSlots === 0 || this.queue.length === 0)) {
+        const id = this.townQueue.shift()!;
+        townSlots++;
+        slot.busy = true;
+        slot.job = `town:${id}`;
+        slot.worker.postMessage({ type: 'town', siteId: id } satisfies WorkerRequest);
+        continue;
+      }
       const req = this.queue.shift();
       if (!req) return;
       this.queued.delete(req.key);
