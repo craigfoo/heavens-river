@@ -677,6 +677,12 @@ export class WorldGen {
     const flat = 1 - hillF;
     o.farm = clamp(smoothstep(-0.2, 0.2, -n2 + flat * 0.6 - 0.1) * smoothstep(35, 120, o.edge) * (1 - o.town) * (1 - o.forest * 0.8), 0, 1);
     o.orchard = clamp(smoothstep(0.25, 0.55, n1 * 0.7 + (1 - Math.abs(hillF - 0.35) * 2) * 0.4) * (1 - o.farm) * (1 - o.town) * smoothstep(30, 90, o.edge), 0, 1);
+    // keep trees and fields off the riverside towpath
+    if (o.mainEdge > 6 && o.mainEdge < 20) {
+      const k = 1 - smoothstep(7, 9, o.mainEdge) * (1 - smoothstep(16, 19, o.mainEdge));
+      o.forest *= k;
+      o.orchard *= k;
+    }
   }
 
   /** Quick height query (full detail) for gameplay. */

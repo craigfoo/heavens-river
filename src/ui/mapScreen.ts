@@ -26,6 +26,8 @@ export interface MapActions {
   destination(site: TownSite): void;
   close(): void;
   canFloat(site: TownSite): { ok: boolean; note: string };
+  /** Give a town your own name (empty restores the generated one). */
+  rename(site: TownSite, name: string): void;
 }
 
 const INK = '#3b2a1a';
@@ -334,6 +336,36 @@ export class MapScreen {
     h.className = 'n';
     h.textContent = known ? t.name : 'Unknown settlement';
     this.panel.appendChild(h);
+    if (known) {
+      const rn = document.createElement('button');
+      rn.className = 'rename';
+      rn.textContent = 'Rename';
+      rn.title = 'Give this town your own name';
+      rn.onclick = () => {
+        const input = document.createElement('input');
+        input.className = 'rename-input';
+        input.value = t.name;
+        input.maxLength = 28;
+        h.replaceWith(input);
+        rn.remove();
+        input.focus();
+        input.select();
+        let done = false;
+        const commit = (save: boolean) => {
+          if (done) return;
+          done = true;
+          if (save) this.actions.rename(t, input.value);
+          this.select(t);
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') commit(true);
+          if (e.key === 'Escape') commit(false);
+          e.stopPropagation();
+        });
+        input.addEventListener('blur', () => commit(true));
+      };
+      this.panel.appendChild(rn);
+    }
     const k = document.createElement('div');
     k.className = 'k';
     k.textContent = `${this.kindLabel(t)} · ${this.distanceKm(t)} away`;

@@ -25,6 +25,7 @@ const C = {
   rockDark: hex('#5b534d'),
   snow: hex('#eef1f5'),
   town: hex('#8e7d62'),
+  path: hex('#9b8763'),
   scree: hex('#978a78'),
 };
 
@@ -45,7 +46,14 @@ export interface BiomeOut {
 }
 
 /** Colour and material weights for a terrain sample with surface normal y-component ny. */
-export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, out: BiomeOut): BiomeOut {
+/** Towpath along the main rivers (spec 7.6): a trodden strip 9-16 m from the channel edge. */
+export function towpathMask(o: TerrainSample): number {
+  const e = o.mainEdge;
+  if (e < 8 || e > 17) return 0;
+  return smoothstep(8.5, 10, e) * (1 - smoothstep(14.5, 16.5, e)) * (1 - smoothstep(0.2, 0.5, o.town));
+}
+
+export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, out: BiomeOut, spacing = 1): BiomeOut {
   const col = out.rgb;
   const slope = 1 - ny;
   // gradient (tan of the slope angle): fields only on gentle ground
@@ -110,6 +118,13 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
       snow = sn;
       rock *= 1 - sn;
     }
+  }
+  // the towpath fades out on coarse chunks, where it would only alias
+  const tp = towpathMask(o) * (1 - smoothstep(3, 8, spacing)) * (1 - r);
+  if (tp > 0) {
+    mix3(col, C.path, tp * 0.9, col);
+    grass *= 1 - tp * 0.85;
+    farm *= 1 - tp;
   }
   if (o.town > 0) {
     mix3(col, C.town, o.town * 0.85, col);
@@ -198,7 +213,7 @@ export function buildChunk(gen: WorldGen, req: ChunkRequest): ChunkResult {
       const sm = samples[v];
       const s = req.s0 + i * ds;
       const z = req.z0 + j * dz;
-      biomeColor(sm, ny, s, z, _bo);
+      biomeColor(sm, ny, s, z, _bo, spacing);
       color[v * 4] = clamp(Math.round(_bo.rgb[0]), 0, 255);
       color[v * 4 + 1] = clamp(Math.round(_bo.rgb[1]), 0, 255);
       color[v * 4 + 2] = clamp(Math.round(_bo.rgb[2]), 0, 255);

@@ -20,6 +20,8 @@ export interface SaveData {
   settings: Settings;
   stats: { distance: number; swims: number; trips: number; played: number };
   introSeen: boolean;
+  /** Player-chosen town names, `${section}:${siteId}` -> name. */
+  names: Record<string, string>;
 }
 
 export function newSave(): SaveData {
@@ -38,6 +40,7 @@ export function newSave(): SaveData {
     settings: { ...DEFAULT_SETTINGS },
     stats: { distance: 0, swims: 0, trips: 0, played: 0 },
     introSeen: false,
+    names: {},
   };
 }
 
@@ -68,10 +71,32 @@ export function loadSave(): SaveData | null {
       settings: loadSettings(d.settings),
       stats: { ...base.stats, ...(d.stats ?? {}) },
       discovered: Array.isArray(d.discovered) ? d.discovered.filter((x) => typeof x === 'string') : [],
+      names: sanitizeNames(d.names),
     } as SaveData;
   } catch {
     return null;
   }
+}
+
+function sanitizeNames(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (/^\d+:\d+$/.test(k) && typeof v === 'string') {
+      const name = cleanTownName(v);
+      if (name) out[k] = name;
+    }
+  }
+  return out;
+}
+
+/** Letters, spaces, apostrophes and hyphens; 1 to 28 characters. */
+export function cleanTownName(v: string): string {
+  return v
+    .replace(/[^\p{L}\p{M} '\-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 28);
 }
 
 export function writeSave(d: SaveData): boolean {

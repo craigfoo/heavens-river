@@ -6,7 +6,7 @@ import { clamp, damp, mod } from '../core/math';
 import type { App } from '../app';
 import { U } from '../render/uniforms';
 import { loadSettings, type Settings } from '../settings';
-import { clearSave, loadSave, newSave, writeSave, type SaveData } from './save';
+import { cleanTownName, clearSave, loadSave, newSave, writeSave, type SaveData } from './save';
 import { TravelDirector } from './travel';
 import { BargeJourney } from './barge';
 import { PhotoMode } from './photo';
@@ -66,6 +66,8 @@ export class Game {
     this.save = saved ?? newSave();
     this.settings = loadSettings(this.save.settings);
     this.save.settings = this.settings;
+    // resume in the section the save was made in
+    if (saved && (saved.s || saved.z) && saved.section !== app.section) app.setSection(saved.section);
     for (const k of this.save.discovered) {
       const [sec, id] = k.split(':').map(Number);
       if (sec === app.section) this.heard.add(id);
@@ -77,6 +79,7 @@ export class Game {
       destination: (t) => this.setDestination(t),
       close: () => this.closeScreens(),
       canFloat: (t) => this.canFloat(t),
+      rename: (t, name) => this.renameTown(t, name),
     });
     this.menu = new Menu(this.overlay, this.settings, {
       resume: () => this.closeScreens(),
@@ -158,6 +161,7 @@ export class Game {
     window.addEventListener('beforeunload', () => this.persist());
     document.addEventListener('visibilitychange', () => document.hidden && this.persist());
     this.bindKeys();
+    this.applyTownNames();
     this.applyAllSettings();
     this.pickSpawn();
     this.installTownInteractions();
@@ -252,6 +256,7 @@ export class Game {
     const keepZ = p.z;
     const keepH = p.h;
     app.setSection(app.section + dir);
+    this.applyTownNames();
     this.heard.clear();
     for (const k of this.save.discovered) {
       const [sec, id] = k.split(':').map(Number);
@@ -434,6 +439,35 @@ export class Game {
     this.app.input.exitLock();
     this.audio.engine.whoosh();
     this.travel.travelTo(t, { s: this.app.player.s, z: this.app.player.z });
+  }
+
+  // ------------------------------------------------------------------ names
+
+  private generatedNames = new Map<number, string>();
+
+  /** Apply the player's own town names to the current section. */
+  applyTownNames() {
+    this.generatedNames.clear();
+    for (const t of this.app.gen.towns) {
+      this.generatedNames.set(t.id, t.name);
+      const custom = this.save.names[`${this.app.section}:${t.id}`];
+      if (custom) (t as { name: string }).name = custom;
+    }
+  }
+
+  renameTown(t: TownSite, raw: string) {
+    const key = `${this.app.section}:${t.id}`;
+    const name = cleanTownName(raw);
+    const original = this.generatedNames.get(t.id) ?? t.name;
+    if (!name || name === original) {
+      delete this.save.names[key];
+      (t as { name: string }).name = original;
+    } else {
+      this.save.names[key] = name;
+      (t as { name: string }).name = name;
+    }
+    this.persist();
+    this.hud.toast(`Renamed to ${t.name}`);
   }
 
   /** Travel to a settlement of this section by id (debug panel). */

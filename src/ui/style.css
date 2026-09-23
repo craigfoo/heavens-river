@@ -195,3 +195,5 @@ body.touch .touch-buttons { display: flex; }
 .read-card.show { opacity: 1; }
 .read-card .rc-title { font: 600 22px/1.2 var(--serif); letter-spacing: .03em; color: #f6e7c8; margin-bottom: 6px; }
 .read-card .rc-text { font: 400 14px/1.55 var(--sans); color: var(--ink-dim); }
+.map-panel .rename { background: none; border: 0; padding: 0; margin: 2px 0 4px; font: 500 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: rgba(59, 42, 26, .6); cursor: pointer; text-decoration: underline dotted; }
+.map-panel .rename-input { font: 600 20px var(--serif); width: 100%; box-sizing: border-box; padding: 2px 6px; border: 1px solid rgba(59, 42, 26, .4); border-radius: 6px; background: rgba(255, 250, 238, .8); color: #3b2a1a; }
