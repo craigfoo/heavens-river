@@ -10,12 +10,14 @@ import { clearSave, loadSave, newSave, writeSave, type SaveData } from './save';
 import { TravelDirector } from './travel';
 import { BargeJourney } from './barge';
 import { PhotoMode } from './photo';
+import { AudioBridge } from './audioBridge';
+import { IntroSequence } from '../intro/intro';
+import { glyphImage } from '../ui/glyphs';
 import { Hud, type CompassMarker } from '../ui/hud';
 import { MapScreen } from '../ui/mapScreen';
 import { Menu } from '../ui/menu';
 import { Journal } from '../ui/journal';
 import type { TownSite } from '../world/gen/settlements';
-import { newSample } from '../world/gen/world';
 import { quinlanNumber } from '../world/gen/names';
 import { L, SECTION_COUNT } from '../config';
 
@@ -30,6 +32,9 @@ export class Game {
   readonly travel: TravelDirector;
   readonly barge: BargeJourney;
   readonly photo: PhotoMode;
+  readonly audio: AudioBridge;
+  private intro: IntroSequence | null = null;
+  private lookHint: HTMLDivElement;
   private photoReturn: GameState = 'explore';
   private visionBeforePhoto: 'off' | 'panorama' | 'split' = 'off';
   save: SaveData;
@@ -123,6 +128,11 @@ export class Game {
     );
     app.scene.add(this.barge.group);
     this.photo = new PhotoMode(app, this.overlay);
+    this.audio = new AudioBridge(app);
+    this.lookHint = document.createElement('div');
+    this.lookHint.className = 'look-hint';
+    this.lookHint.textContent = 'Click to look around';
+    this.overlay.appendChild(this.lookHint);
     app.pipeline.renderer.domElement.addEventListener('click', () => {
       if (this.state === 'explore' || this.state === 'barge' || this.state === 'photo') this.app.input.requestLock();
     });
@@ -138,6 +148,10 @@ export class Game {
     this.applyAllSettings();
     this.pickSpawn();
     this.installTownInteractions();
+    this.interactions.push({
+      test: () => (app.hatch.active && app.hatch.distance(app.player.s, app.player.z) < 3.2 ? 'Read the plaque' : null),
+      run: () => this.hud.toast('MAINTENANCE 07 — crew access only, by order of Anek. The hatch is sealed behind you.'),
+    });
     app.terrain.pool.onMap = (d) => this.map.setData(d);
     app.terrain.pool.requestMap(840, 520);
   }
@@ -245,42 +259,16 @@ export class Game {
   }
 
   /** The hero valley: a rise on the valley wall with a clear view over the first river city. */
+  /** The arrival point: just outside the maintenance hatch, facing the valley and the first river city. */
   heroSpot() {
-    const gen = this.app.gen;
-    const city = gen.towns.find((t) => t.kind === 'city') ?? gen.towns[0];
-    const smp = newSample();
-    const target = { s: city.s, z: city.z, h: city.level + 12 };
-    let best = { s: city.s, z: city.z - city.halfLen - 400, yaw: 0, score: -Infinity };
-    for (let ring = 0; ring < 6; ring++) {
-      const dist = 1600 + ring * 900;
-      for (let k = 0; k < 24; k++) {
-        const ang = (k / 24) * Math.PI * 2;
-        const s = city.s + Math.sin(ang) * dist;
-        const z = city.z + Math.cos(ang) * dist;
-        const o = gen.sample(s, z, 0, smp);
-        if (o.water > o.h - 0.5 || o.town > 0.1) continue;
-        const rise = o.h - city.level;
-        if (rise < 25) continue;
-        // line of sight from eye height to the city centre
-        let blocked = 0;
-        for (let i = 1; i < 20; i++) {
-          const f = i / 20;
-          const ls = s + (target.s - s) * f;
-          const lz = z + (target.z - z) * f;
-          const lh = o.h + 1.2 + (target.h - o.h - 1.2) * f;
-          if (gen.heightAt(ls, lz) > lh - 2) blocked++;
-        }
-        if (blocked > 1) continue;
-        const score = -Math.abs(rise - 70) * 0.6 - dist * 0.004 - blocked * 40 - o.forest * 30;
-        if (score > best.score) {
-          const dS = wrapS(city.s - s);
-          const dZ = city.z - z;
-          best = { s, z, yaw: Math.atan2(-dS, -dZ), score };
-        }
-      }
+    const app = this.app;
+    const hc = app.gen.hatch;
+    if (hc) this.heard.add(hc.city);
+    if (!app.hatch.active) {
+      const city = app.gen.towns.find((t) => t.kind === 'city') ?? app.gen.towns[0];
+      return { s: city.s, z: city.z - city.halfLen - 400, yaw: 0 };
     }
-    this.heard.add(city.id);
-    return best;
+    return app.hatch.doorstep(2.2);
   }
 
   persist() {
@@ -308,6 +296,7 @@ export class Game {
     if (banner) this.hud.showBanner(t.name, `${t.kind === 'city' ? 'River city' : t.kind === 'town' ? 'Town' : 'Hamlet'} on the ${this.app.gen.rivers[t.river].name}`);
     if (fresh) {
       this.hud.toast(`Discovered ${t.name}`);
+      this.audio.engine.chime();
       this.persist();
     }
   }
@@ -407,6 +396,7 @@ export class Game {
     this.app.paused = true;
     this.app.input.enabled = false;
     this.app.input.exitLock();
+    this.audio.engine.whoosh();
     this.travel.travelTo(t, { s: this.app.player.s, z: this.app.player.z });
   }
 
@@ -516,6 +506,10 @@ export class Game {
         break;
       case 'quality':
         app.setQuality(s.quality);
+        break;
+      case 'volume':
+      case 'muted':
+        this.audio.setVolume(s.volume, s.muted);
         break;
       case 'visionMode':
         if (this.visionOn !== 'off') this.setVision(s.visionMode);
@@ -688,6 +682,11 @@ export class Game {
     this.scrub = damp(this.scrub, scrubbing ? (inp.isDown('ShiftLeft') ? -1 : 1) : 0, 6, dt);
     if (Math.abs(this.scrub) > 0.01) app.timeOfDay = mod(app.timeOfDay + this.scrub * dt * 0.06, 1);
     for (const f of this.onUpdate) f(dt);
+    this.audio.update(dt, {
+      paused: this.state === 'menu' || this.state === 'map' || this.state === 'journal',
+      onBarge: this.state === 'barge',
+    });
+    this.lookHint.style.opacity = this.state === 'explore' && !app.input.locked && !app.input.touchActive && !app.testMode ? '1' : '0';
     this.steerEyes();
     if (this.state === 'photo') this.photo.update(dt);
     if (this.state === 'barge' && this.barge.active) {
@@ -791,7 +790,7 @@ export class Game {
       }
     }
     this.hud.setPrompt(prompt);
-    this.hud.setVisible(this.state !== 'photo' && this.state !== 'intro' && this.state !== 'cutscene');
+    this.hud.setVisible(this.state !== 'photo' && this.state !== 'intro' && this.state !== 'cutscene' && this.state !== 'boot');
   }
 
   /** Called when the save's town knowledge should include signpost-mentioned towns. */
@@ -810,8 +809,96 @@ export class Game {
     return this.currentTown;
   }
 
+  /** The arrival sequence, while it plays (e.g. for tests to seek or skip). */
+  get introSequence() {
+    return this.intro;
+  }
+
   start() {
+    const app = this.app;
+    const params = new URLSearchParams(location.search);
+    if (app.testMode) {
+      this.state = 'explore';
+      this.hud.hideHintsSoon();
+      return;
+    }
+    // title screen over the live world; its click is the gesture that unlocks audio
+    this.state = 'boot';
+    app.paused = true;
+    app.input.enabled = false;
+    const fresh = !this.save.introSeen;
+    const el = document.createElement('div');
+    el.className = 'title-screen';
+    el.innerHTML = `
+      <div class="tt-inner">
+        <img class="tt-glyph" alt="" src="${glyphImage('Heavensriver', 64, '#f3dfb4', 'rgba(255,200,120,0.6)')}">
+        <h1>Heaven's River</h1>
+        <p class="tt-sub">Walk the endless river strand as a Quinlan</p>
+        <button class="tt-start">${this.save.s || this.save.z ? 'Continue' : 'Begin'}</button>
+        <label class="tt-opt"><input type="checkbox" ${fresh && !params.has('nointro') ? 'checked' : ''}> Play the arrival sequence</label>
+        <p class="tt-credit">A non-commercial fan project set in Dennis E. Taylor's Bobiverse (<i>Heaven's River</i>). Not affiliated with the author or publisher.</p>
+      </div>`;
+    this.overlay.appendChild(el);
+    const btn = el.querySelector('.tt-start') as HTMLButtonElement;
+    const box = el.querySelector('input') as HTMLInputElement;
+    btn.addEventListener('click', () => {
+      this.audio.start();
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 900);
+      if (box.checked) this.startIntro();
+      else this.enterWorld(true);
+    });
+  }
+
+  private enterWorld(lock: boolean) {
+    const app = this.app;
     this.state = 'explore';
+    app.paused = false;
+    app.input.enabled = true;
     this.hud.hideHintsSoon();
+    if (lock && !app.testMode) app.input.requestLock();
+  }
+
+  /** Play the arrival sequence while the hatch valley streams in behind it. */
+  startIntro() {
+    const app = this.app;
+    this.state = 'intro';
+    app.paused = true;
+    app.input.enabled = false;
+    // stand in the hatch doorway at golden hour so the world loads during the intro
+    const spot = this.heroSpot();
+    const inDoor = app.hatch.active ? app.hatch.doorstep(0.6) : spot;
+    app.spawn(inDoor.s, inDoor.z, inDoor.yaw);
+    app.player.pitch = -0.04;
+    app.timeOfDay = 0.69;
+    app.hatch.open = app.hatch.openTarget = 1;
+    const e = this.audio.engine;
+    const intro = new IntroSequence(app.pipeline.renderer, this.overlay, {
+      onSpinProgress: (p) => e.spinTransfer(p),
+      onElevator: (on) => e.elevator(on),
+      onSkip: () => e.elevator(false),
+    });
+    this.intro = intro;
+    intro.resize(window.innerWidth, window.innerHeight);
+    // compile the world's shaders in the background so the reveal doesn't hitch
+    app.updateCamera();
+    void app.pipeline.renderer.compileAsync(app.scene, app.camera).catch(() => undefined);
+    const onResize = (w: number, h: number) => intro.active && intro.resize(w, h);
+    app.onResize.push(onResize);
+    app.renderOverride = (dt) => {
+      intro.update(dt);
+      intro.render();
+    };
+    intro.start(() => {
+      app.renderOverride = null;
+      app.onResize = app.onResize.filter((f) => f !== onResize);
+      intro.dispose();
+      this.intro = null;
+      this.save.introSeen = true;
+      this.persist();
+      this.enterWorld(false);
+      const city = app.gen.towns.find((t) => t.id === app.gen.hatch?.city);
+      this.hud.showBanner(`Section ${quinlanNumber(app.section)}`, city ? `${city.name} lies below, on the ${app.gen.rivers[city.river].name}` : 'Welcome, traveller', 7);
+    });
   }
 }

@@ -16,6 +16,7 @@ import { TerrainManager } from './world/terrain/terrainManager';
 import { GrassField } from './world/vegetation/grass';
 import { TownManager } from './towns/townManager';
 import { Portals } from './world/portals';
+import { Hatch } from './world/hatch';
 import { TownLife } from './npc/townLife';
 import { PlayerAvatar } from './npc/avatar';
 import { SurveillanceBirds } from './npc/birds';
@@ -37,6 +38,7 @@ export class App {
   readonly grass = new GrassField();
   towns: TownManager;
   readonly portals = new Portals();
+  readonly hatch = new Hatch();
   readonly life: TownLife;
   readonly avatar = new PlayerAvatar();
   readonly birds: SurveillanceBirds;
@@ -65,6 +67,9 @@ export class App {
   simFrozen = false;
   /** Called right after a frame is rendered (e.g. to capture the canvas). */
   afterRender: (() => void)[] = [];
+  /** When set, draws the frame instead of the world pipeline (the intro). */
+  renderOverride: ((dt: number) => void) | null = null;
+  onResize: ((w: number, h: number) => void)[] = [];
   /** Freeze player simulation (menus, cutscenes). */
   paused = false;
   debugText: HTMLDivElement;
@@ -100,6 +105,8 @@ export class App {
     this.scene.add(this.birds.group);
     this.portals.build(this.gen);
     this.scene.add(this.portals.group);
+    this.hatch.build(this.gen);
+    this.scene.add(this.hatch.group);
     this.scene.add(this.sky.mesh);
     this.scene.add(this.lighting.sun, this.lighting.target, this.lighting.hemi);
     this.debugText = document.createElement('div');
@@ -112,6 +119,7 @@ export class App {
 
   resize() {
     this.pipeline.resize(window.innerWidth, window.innerHeight);
+    for (const f of this.onResize) f(window.innerWidth, window.innerHeight);
   }
 
   /** Switch to another section of the strand (regenerates the world). */
@@ -122,6 +130,7 @@ export class App {
     this.terrain.setSection(this.section, WORLD_SEED);
     this.towns.setGen(this.gen);
     this.portals.build(this.gen);
+    this.hatch.build(this.gen);
   }
 
   /** Apply a graphics quality preset. */
@@ -209,9 +218,11 @@ export class App {
     this.life.update(simDt, cam, this.player, this.timeOfDay);
     this.avatar.update(simDt, this.player);
     this.birds.update(simDt, cam, this.player);
+    this.hatch.update(dt, this.player.s, this.player.z);
     this.sky.update(Z_MIN - frame.originZ, Z_MAX - frame.originZ);
     if (render) {
-      this.pipeline.render(dt);
+      if (this.renderOverride) this.renderOverride(dt);
+      else this.pipeline.render(dt);
       for (const f of this.afterRender.splice(0)) f();
     }
     this.stats(dt);

@@ -24,6 +24,9 @@ import {
 } from './rivers';
 import { planTownSites, type TownSite, type TownTerrain } from './settlements';
 
+/** Dimensions of the hillside maintenance hatch block (metres). */
+export const HATCH = { halfW: 4.2, depth: 4.6, height: 5.3, berm: 3.6 };
+
 export interface TerrainSample {
   h: number;
   /** Water surface height, or -1e9 when this point is not near water. */
@@ -165,6 +168,91 @@ export class WorldGen {
           list.push(site);
         }
     }
+    this.hatch = this.findHatch();
+  }
+
+  /** Maintenance hatch set into a hillside overlooking the first river city (the arrival point). */
+  hatch: { s: number; z: number; yaw: number; base: number; city: number } | null = null;
+
+  private findHatch(): { s: number; z: number; yaw: number; base: number; city: number } | null {
+    const city = this.towns.find((t) => t.kind === 'city') ?? this.towns[0];
+    if (!city) return null;
+    const smp = newSample();
+    const target = { s: city.s, z: city.z, h: city.level + 12 };
+    let best: { s: number; z: number; yaw: number; score: number } | null = null;
+    for (let ring = 0; ring < 7; ring++) {
+      const dist = 1100 + ring * 700;
+      for (let k = 0; k < 24; k++) {
+        const ang = (k / 24) * Math.PI * 2;
+        const s = city.s + Math.sin(ang) * dist;
+        const z = city.z + Math.cos(ang) * dist;
+        if (z < 20_000 || z > L - 20_000) continue;
+        const o = this.sample(s, z, 0, smp);
+        if (o.water > o.h - 0.5 || o.town > 0.1) continue;
+        const rise = o.h - city.level;
+        if (rise < 25) continue;
+        // line of sight from eye height to the city centre
+        let blocked = 0;
+        for (let i = 1; i < 20; i++) {
+          const f = i / 20;
+          const lh = o.h + 1.2 + (target.h - o.h - 1.2) * f;
+          if (this.heightAt(s + (target.s - s) * f, z + (target.z - z) * f) > lh - 2) blocked++;
+        }
+        if (blocked > 1) continue;
+        // prefer a slope that rises behind the viewpoint (somewhere to cut the hatch into)
+        const dS = wrapDs(city.s - s);
+        const dZ = city.z - z;
+        const dl = Math.hypot(dS, dZ);
+        const behind = this.heightAt(s - (dS / dl) * 25, z - (dZ / dl) * 25) - o.h;
+        // look down on the city from a slope: steeper view angle, nearer, hill at our back
+        const view = (Math.atan2(rise, dist) * 180) / Math.PI;
+        const score = Math.min(view, 6) * 10 - dist * 0.0025 - blocked * 40 - o.forest * 30 + clamp(behind, -5, 12) * 4;
+        if (!best || score > best.score) best = { s, z, yaw: Math.atan2(-dS, -dZ), score };
+      }
+    }
+    if (!best) {
+      const s = city.s;
+      const z = city.z - city.halfLen - 600;
+      best = { s, z, yaw: 0, score: 0 };
+    }
+    const base = this.heightAt(best.s, best.z);
+    return { s: best.s, z: best.z, yaw: best.yaw, base, city: city.id };
+  }
+
+  /**
+   * Terrain around the hatch: a level apron in front, a hollow under the
+   * concrete portal block (hidden inside it) and a turf berm hugging its sides
+   * and back. Local frame: u = metres in front of the facade, v = lateral.
+   */
+  private hatchTerrain(s: number, z: number, h: number, o: TerrainSample): number {
+    const hc = this.hatch!;
+    const ds = wrapDs(s - hc.s);
+    const dz = z - hc.z;
+    if (Math.abs(ds) > 45 || Math.abs(dz) > 45) return h;
+    const fs = -Math.sin(hc.yaw);
+    const fz = -Math.cos(hc.yaw);
+    const u = ds * fs + dz * fz;
+    const v = Math.abs(ds * fz - dz * fs);
+    const b = hc.base;
+    // berm: highest against the block, sloping away; only behind the facade line
+    const dv = Math.max(0, v - HATCH.halfW);
+    const du = Math.max(0, -u - HATCH.depth);
+    const berm = b + HATCH.berm - Math.hypot(dv, du) * 0.6;
+    const wBerm = smoothstep(-0.15, -0.9, u);
+    h = Math.max(h, lerp(h, berm, wBerm));
+    // level apron in front of the door
+    const wA = (1 - smoothstep(5, 9, v)) * smoothstep(-1.0, 0.3, u) * (1 - smoothstep(9, 18, u));
+    h = lerp(h, b - 0.04, wA);
+    // trodden gravel instead of grass right in front of the door
+    o.town = Math.max(o.town, wA * (1 - smoothstep(3, 9, u)) * (1 - smoothstep(4, 7, v)));
+    // hollow under the block (its walls hide the transition)
+    const wDip = (1 - smoothstep(HATCH.halfW - 1.9, HATCH.halfW - 1.1, v)) * (1 - smoothstep(HATCH.depth - 1.2, HATCH.depth - 0.6, -u)) * (1 - smoothstep(0.1, 0.6, u));
+    h = lerp(h, b - 0.5, wDip);
+    const k = smoothstep(12, 26, Math.hypot(ds, dz));
+    o.forest *= k;
+    o.farm *= k;
+    o.orchard *= k;
+    return h;
   }
 
   /** Town sites whose footprint may cover (s, z). */
@@ -458,6 +546,7 @@ export class WorldGen {
     }
     o.h = h;
     this.biomeMasks(s, z, o);
+    if (this.hatch) o.h = this.hatchTerrain(s, z, o.h, o);
     return o;
   }
 

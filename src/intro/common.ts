@@ -37,6 +37,10 @@ export interface IntroSet {
   dispose(): void;
 }
 
+/** Users who ask for reduced motion get no camera shake or vibration. */
+export const SHAKE =
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 1;
+
 export const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 export function smoothstep(a: number, b: number, x: number) {
@@ -178,7 +182,6 @@ export function makeStarfield(count: number, radius: number, seed: number, band:
     uniforms: { uPx: { value: 1 }, uTime: { value: 0 }, uGain: { value: 1 } },
     blending: AdditiveBlending,
     depthWrite: false,
-    depthTest: false,
     transparent: true,
   });
   const pts = new Points(geo, mat);

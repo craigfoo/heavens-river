@@ -94,7 +94,8 @@ uniform float uCircKm; // wrap the pattern around the strand (0: no wrap)
 
 struct HrShell { float h; vec2 g; float alb; float sh; };
 
-float hr_lod(float cell, float fp) { return 1.0 - smoothstep(0.1, 0.35, fp / cell); }
+// an octave with cells of size "cell" fades out once a cell spans fewer than ~5-14 pixels
+float hr_lod(float cell, float fp) { return 1.0 - smoothstep(0.07, 0.2, fp / cell); }
 
 vec2 hr_cellSize(float cell, out float per) {
   per = 0.0;
@@ -124,39 +125,35 @@ void hr_craters(vec2 p, float cell, float dens, float seed, vec3 sun, float w, i
       vec2 d = fq - ctr;
       float dist = length(d);
       float x = dist / rad;
-      if (x > 2.4) continue;
-      float depth = 0.42 * rad;
-      float rim = 0.085 * rad;
-      float h;
-      float dh;
-      if (x < 1.0) {
-        h = depth * (x * x - 1.0) + rim;
-        dh = 2.0 * depth * x;
-      } else {
-        float e = exp(-(x - 1.0) * (x - 1.0) * 4.0);
-        h = rim * e;
-        dh = -8.0 * rim * (x - 1.0) * e;
-      }
+      if (x > 2.2) continue;
+      // fresh craters are deep with sharp rims; old ones are shallow and soft
+      float fresh = r.z;
+      float depth = rad * mix(0.1, 0.3, fresh);
+      float rim = depth * 0.3;
+      float rw = mix(0.4, 0.26, fresh);
+      // smooth bowl (zero slope at the rim) plus a gaussian rim
+      float b = max(1.0 - x * x, 0.0);
+      float e = exp(-(x - 1.0) * (x - 1.0) / (rw * rw));
+      float h = -depth * b * b + rim * e;
+      float dh = 4.0 * depth * x * b - 2.0 * rim * (x - 1.0) / (rw * rw) * e;
       vec2 dir = d / max(dist, 1e-5);
       s.h += h * cell * w;
       s.g += dir * (dh / rad) * w;
-      // fresh craters keep bright ejecta; old floors are darker
-      float fresh = step(0.62, r.z);
-      s.alb += w * fresh * 0.28 * exp(-(x - 1.05) * (x - 1.05) * 5.0);
-      s.alb -= w * 0.06 * (1.0 - smoothstep(0.2, 1.0, x));
-      // the sun-side rim shades the bowl
+      s.alb += w * step(0.7, fresh) * 0.16 * exp(-(x - 1.1) * (x - 1.1) * 3.0);
+      s.alb -= w * 0.05 * b;
+      // the sun-side rim shades part of the bowl
       if (x < 1.0 && sun.z > 0.0) {
-        float b = dot(d, sun.xy);
-        float tr = -b + sqrt(max(b * b - dist * dist + rad * rad, 0.0));
+        float bd = dot(d, sun.xy);
+        float tr = -bd + sqrt(max(bd * bd - dist * dist + rad * rad, 0.0));
         float slope = (rim - h) / max(tr, 1e-4);
-        s.sh = min(s.sh, mix(1.0, 1.0 - smoothstep(0.8, 1.25, slope / sun.z), w));
+        s.sh = min(s.sh, mix(1.0, 1.0 - smoothstep(0.9, 1.7, slope / sun.z), w));
       }
     }
   }
 }
 
 void hr_undulate(vec2 p, float cell, float amp, float fp, inout HrShell s) {
-  for (int o = 0; o < 5; o++) {
+  for (int o = 0; o < 7; o++) {
     float w = hr_lod(cell, fp);
     if (w <= 0.0) break;
     float per;
@@ -175,13 +172,26 @@ HrShell hr_shell(vec2 p, float fp, vec3 sun) {
   float m1 = hr_vn2(p / c1, per).x;
   vec2 c2 = hr_cellSize(11.0, per);
   float m2 = hr_vn2(p / c2 + 5.3, per).x;
-  s.alb = mix(0.68, 1.1, smoothstep(0.2, 0.8, m1 * 0.65 + m2 * 0.35));
-  hr_craters(p, 34.0, 0.32, 1.0, sun, hr_lod(34.0, fp), s);
-  hr_craters(p, 8.0, 0.5, 2.0, sun, hr_lod(8.0, fp), s);
-  hr_craters(p, 2.0, 0.55, 3.0, sun, hr_lod(2.0, fp), s);
-  hr_craters(p, 0.5, 0.6, 4.0, sun, hr_lod(0.5, fp), s);
-  hr_craters(p, 0.13, 0.6, 5.0, sun, hr_lod(0.13, fp), s);
-  hr_undulate(p, 16.0, 0.07, fp, s);
+  s.alb = mix(0.62, 1.12, smoothstep(0.15, 0.85, m1 * 0.65 + m2 * 0.35));
+  hr_craters(p, 34.0, 0.3, 1.0, sun, hr_lod(34.0, fp), s);
+  hr_craters(p, 9.0, 0.36, 2.0, sun, hr_lod(9.0, fp), s);
+  hr_craters(p, 2.4, 0.4, 3.0, sun, hr_lod(2.4, fp), s);
+  hr_craters(p, 0.6, 0.42, 4.0, sun, hr_lod(0.6, fp), s);
+  hr_craters(p, 0.15, 0.4, 5.0, sun, hr_lod(0.15, fp), s);
+  hr_undulate(p, 20.0, 0.1, fp, s);
+  // fine regolith texture
+  float tex = 0.0;
+  float amp = 0.5;
+  float cell = 3.0;
+  for (int o = 0; o < 5; o++) {
+    float w = hr_lod(cell, fp);
+    if (w <= 0.0) break;
+    vec2 cs = hr_cellSize(cell, per);
+    tex += (hr_vn2(p / cs + 3.1 * float(o), per).x - 0.5) * amp * w;
+    cell *= 0.42;
+    amp *= 0.85;
+  }
+  s.alb *= 1.0 + tex * 0.7;
   return s;
 }
 

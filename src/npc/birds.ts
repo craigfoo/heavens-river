@@ -216,6 +216,8 @@ export class SurveillanceBirds {
   private anim: InstancedBufferAttribute;
   private birds = new Map<number, Bird[]>();
   private rng = new Rng(0xb1ad);
+  /** Called when a bird takes off (world s, z). */
+  onTakeoff: ((s: number, z: number) => void) | null = null;
 
   constructor(towns: TownManager) {
     const base = buildBirdGeometry();
@@ -334,6 +336,7 @@ export class SurveillanceBirds {
       // quick robotic head snaps
       b.head += clamp(b.headT - b.head, -dt * 9, dt * 9);
       if (b.timer <= 0) {
+        this.onTakeoff?.(b.town.anchorS + b.x, b.town.anchorZ + b.z);
         b.mode = 'fly';
         b.cr = this.rng.range(25, 70);
         b.ch = b.h + this.rng.range(14, 40);
