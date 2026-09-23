@@ -48,6 +48,7 @@ export class TerrainWorkerPool {
     this.inflight.clear();
     this.townQueue.length = 0;
     this.townPending.clear();
+    this.special.length = 0;
     for (const s of this.slots) {
       s.ready = false;
       s.busy = true;
@@ -90,36 +91,19 @@ export class TerrainWorkerPool {
     return this.queued.has(key) || this.inflight.has(key);
   }
 
+  /** One-off jobs (far shell, map image) go ahead of chunks on the next free worker. */
+  private special: { job: string; msg: WorkerRequest }[] = [];
+
   requestMap(nz: number, ns: number) {
-    const epoch = this.epoch;
-    const trySend = () => {
-      if (epoch !== this.epoch) return;
-      const slot = this.slots.find((s) => s.ready && !s.busy);
-      if (!slot) {
-        setTimeout(trySend, 40);
-        return;
-      }
-      slot.busy = true;
-      slot.job = '__map';
-      slot.worker.postMessage({ type: 'map', nz, ns } satisfies WorkerRequest);
-    };
-    trySend();
+    this.special = this.special.filter((j) => j.job !== '__map');
+    this.special.push({ job: '__map', msg: { type: 'map', nz, ns } });
+    this.pump();
   }
 
   requestFarShell(ns: number, nz: number) {
-    const epoch = this.epoch;
-    const trySend = () => {
-      if (epoch !== this.epoch) return;
-      const slot = this.slots.find((s) => s.ready && !s.busy);
-      if (!slot) {
-        setTimeout(trySend, 30);
-        return;
-      }
-      slot.busy = true;
-      slot.job = '__farshell';
-      slot.worker.postMessage({ type: 'farshell', ns, nz } satisfies WorkerRequest);
-    };
-    trySend();
+    this.special = this.special.filter((j) => j.job !== '__farshell');
+    this.special.unshift({ job: '__farshell', msg: { type: 'farshell', ns, nz } });
+    this.pump();
   }
 
   /** Queue a settlement build (skipped if already pending). High priority jumps the queue. */
@@ -157,6 +141,13 @@ export class TerrainWorkerPool {
     let townSlots = 0;
     for (const slot of this.slots) {
       if (!slot.ready || slot.busy) continue;
+      const sp = this.special.shift();
+      if (sp) {
+        slot.busy = true;
+        slot.job = sp.job;
+        slot.worker.postMessage(sp.msg);
+        continue;
+      }
       // at most one idle worker at a time takes town work unless chunks are idle
       if (this.townQueue.length && (townSlots === 0 || this.queue.length === 0)) {
         const id = this.townQueue.shift()!;

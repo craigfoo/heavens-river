@@ -95,6 +95,7 @@ export class App {
     this.terrain = new TerrainManager(workers);
     if (mobile) this.terrain.lodK = 1.6;
     this.terrain.setSection(this.section, WORLD_SEED);
+    this.terrain.setRivers(this.gen.rivers);
     this.scene.add(this.terrain.group);
     this.scene.add(this.grass.group);
     this.towns = new TownManager(this.terrain.pool, this.gen);
@@ -131,6 +132,7 @@ export class App {
     this.gen = new WorldGen(this.section, WORLD_SEED);
     this.world.setGen(this.gen);
     this.terrain.setSection(this.section, WORLD_SEED);
+    this.terrain.setRivers(this.gen.rivers);
     this.towns.setGen(this.gen);
     this.portals.build(this.gen);
     this.hatch.build(this.gen);

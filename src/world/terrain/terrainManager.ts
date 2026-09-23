@@ -6,11 +6,15 @@
 import {
   BufferAttribute,
   BufferGeometry,
+  DataTexture,
+  FloatType,
   Group,
   InstancedMesh,
   Material,
   Mesh,
   MeshLambertMaterial,
+  NearestFilter,
+  RGBAFormat,
   Sphere,
   Vector2,
   Vector3,
@@ -101,6 +105,26 @@ export class TerrainManager {
     this.trees = new TreeRenderer();
     this.group.add(this.trees.group);
     this.group.name = 'terrain';
+  }
+
+  /** Main river centrelines for the far shell's silver threads. */
+  setRivers(rivers: { channelAt(z: number): number; widthAt(z: number): number; zStart: number; zEnd: number }[]) {
+    const data = new Float32Array(RIVER_SAMPLES * 4 * 4);
+    rivers.slice(0, 4).forEach((rv, r) => {
+      for (let i = 0; i < RIVER_SAMPLES; i++) {
+        const z = Z_MIN + ((i + 0.5) / RIVER_SAMPLES) * (Z_MAX - Z_MIN);
+        const inside = z > rv.zStart && z < rv.zEnd;
+        const k = (r * RIVER_SAMPLES + i) * 4;
+        data[k] = rv.channelAt(Math.min(Math.max(z, rv.zStart), rv.zEnd));
+        data[k + 1] = inside ? rv.widthAt(z) * 0.5 : 0;
+      }
+    });
+    const tex = new DataTexture(data, RIVER_SAMPLES, 4, RGBAFormat, FloatType);
+    tex.minFilter = NearestFilter;
+    tex.magFilter = NearestFilter;
+    tex.needsUpdate = true;
+    farUniforms.uRivers.value?.dispose();
+    farUniforms.uRivers.value = tex;
   }
 
   setSection(section: number, seed: number) {
@@ -223,6 +247,7 @@ export class TerrainManager {
     const off0 = wrapS(s0 - frame.originS);
     farUniforms.uNearS.value.set(off0, off0 + blockW);
     farUniforms.uNearZ.value.set(Z_MIN + iz0 * ROOT_TILE_Z - frame.originZ, Z_MIN + (iz1 + 1) * ROOT_TILE_Z - frame.originZ);
+    farUniforms.uOrigin.value.set(frame.originS, frame.originZ);
     // evict stale nodes
     if (this.nodes.size > this.maxCached) this.evict();
     this.trees.update(cam);
@@ -423,9 +448,15 @@ function buildGridIndex(N: number): BufferAttribute {
   return new BufferAttribute(new Uint16Array(tris), 1);
 }
 
+const RIVER_SAMPLES = 2048;
+
 const farUniforms = {
   uNearS: { value: new Vector2() },
   uNearZ: { value: new Vector2() },
+  /** Frame origin (s, z) in section metres, for world positions on the far shell. */
+  uOrigin: { value: new Vector2() },
+  /** Main river centrelines: RGBA32F, one row per river, (s, half width) along z. */
+  uRivers: { value: null as DataTexture | null },
 };
 
 function createFarShellMaterial(): MeshLambertMaterial {
@@ -436,12 +467,37 @@ function createFarShellMaterial(): MeshLambertMaterial {
     uniforms: farUniforms,
     vertexPars: `attribute vec4 aColor; varying vec4 vFColor;`,
     vertexBegin: `vFColor = vec4(pow(aColor.rgb, vec3(2.2)), aColor.a);`,
-    fragmentPars: `uniform vec2 uNearS; uniform vec2 uNearZ; varying vec4 vFColor;`,
+    fragmentPars: `uniform vec2 uNearS; uniform vec2 uNearZ; uniform vec2 uOrigin; uniform sampler2D uRivers; varying vec4 vFColor;
+      // silver threads: the main rivers drawn from their centrelines, far finer than the shell's grid
+      float hrRiverThreads(float s, float z) {
+        float u = (z - ${Z_MIN.toFixed(1)}) / ${(Z_MAX - Z_MIN).toFixed(1)} * ${RIVER_SAMPLES.toFixed(1)} - 0.5;
+        float i0 = clamp(floor(u), 0.0, ${(RIVER_SAMPLES - 2).toFixed(1)});
+        float f = clamp(u - i0, 0.0, 1.0);
+        float m = 0.0;
+        for (int r = 0; r < 4; r++) {
+          float v = (float(r) + 0.5) / 4.0;
+          vec4 a = texture2D(uRivers, vec2((i0 + 0.5) / ${RIVER_SAMPLES.toFixed(1)}, v));
+          vec4 b = texture2D(uRivers, vec2((i0 + 1.5) / ${RIVER_SAMPLES.toFixed(1)}, v));
+          float rs = mix(a.x, b.x, f);
+          float hw = mix(a.y, b.y, f);
+          float ds = mod(s - rs + ${(CIRC / 2).toFixed(1)}, ${CIRC.toFixed(1)}) - ${(CIRC / 2).toFixed(1)};
+          float aa = fwidth(ds) * 0.8 + 1.0;
+          m = max(m, (1.0 - smoothstep(hw - aa, hw + aa, abs(ds))) * step(1.0, hw));
+        }
+        return m;
+      }`,
     fragmentColor: `
       {
         float dsf = uR * atan(vHrWorld.x, uR - vHrWorld.y);
         if (dsf > uNearS.x && dsf < uNearS.y && vHrWorld.z > uNearZ.x && vHrWorld.z < uNearZ.y) discard;
-        diffuseColor.rgb *= vFColor.rgb;
+        // the shell's ~2 km colour cells alias the farm/forest pattern into blotches:
+        // pull vegetation toward a regional olive so the far side reads as land, not cloud
+        vec3 fc = vFColor.rgb;
+        float veg = (1.0 - vFColor.a) * step(fc.b, 0.8 * fc.g);
+        fc = mix(fc, vec3(0.17, 0.23, 0.09) * (0.75 + 0.5 * dot(fc, vec3(0.3, 0.59, 0.11)) / 0.25), 0.5 * veg);
+        diffuseColor.rgb *= fc;
+        float river = hrRiverThreads(uOrigin.x + dsf, uOrigin.y + vHrWorld.z);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), river);
       }
     `,
   });

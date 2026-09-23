@@ -91,12 +91,21 @@ vec3 hrAerial(vec3 col, vec3 a, vec3 b) {
   vec2 od = hrOpticalDepth(a, b);
   vec3 tauR = uBetaR * od.x;
   float tauM = uBetaM * od.y;
+  // Artistic liberty for Bob mode: sight lines that climb through the thin core
+  // toward the far side keep more contrast, so rivers read as silver threads
+  // 180 km up. Near-horizontal haze (the land curving up) is unchanged.
+  vec2 q = a.xy - vec2(0.0, uR);
+  vec2 d = b.xy - a.xy;
+  float tt = clamp(-dot(q, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
+  float core = 1.0 - smoothstep(0.25 * uR, 0.8 * uR, length(q + d * tt));
+  tauR *= 1.0 - 0.5 * core;
+  tauM *= 1.0 - 0.5 * core;
   vec3 tau = tauR + vec3(tauM);
   vec3 T = exp(-tau);
   vec3 v = normalize(b - a);
   float mu = dot(v, uSunDir);
   vec3 phase = (tauR * hrPhaseR(mu) + vec3(tauM * hrPhaseM(mu))) / max(tau, vec3(1e-6));
-  vec3 inscat = (1.0 - T) * (uAmbientScatter + uSunColor * phase * 4.0);
+  vec3 inscat = (1.0 - T) * (uAmbientScatter + uSunColor * phase * 4.0) * (1.0 - 0.3 * core);
   return col * T + inscat;
 }
 
