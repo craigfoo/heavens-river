@@ -93,7 +93,7 @@ function buildTreeGeometry(detail: 'high' | 'low'): BufferGeometry {
       pos.setXYZ(i, v.x, v.y, v.z);
     }
     g.translate(x, y, z);
-    const ng = g.toNonIndexed();
+    const ng = g.index ? g.toNonIndexed() : g;
     // soft, rounded foliage shading: normals from the blob and crown centres
     const pp = ng.getAttribute('position');
     const nn = new Float32Array(pp.count * 3);

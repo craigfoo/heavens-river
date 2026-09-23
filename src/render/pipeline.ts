@@ -22,7 +22,7 @@ import {
   Uniform,
   Vector3,
   WebGLRenderer,
-  PCFSoftShadowMap,
+  PCFShadowMap,
 } from 'three';
 import { VisionPass } from './vision';
 import { SunShaftsEffect } from './sunShafts';
@@ -115,7 +115,7 @@ export class Pipeline {
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = NoToneMapping;
     this.renderer.shadowMap.enabled = opts.shadows;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.shadowMap.type = PCFShadowMap;
     this.renderer.info.autoReset = false;
     this.composer = new EffectComposer(this.renderer, {
       frameBufferType: HalfFloatType,
