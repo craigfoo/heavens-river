@@ -184,11 +184,13 @@ varying vec3 vT;
 varying vec2 vSurf;
 varying float vCover;
 void main() {
+  vec2 p = vSurf * uKmPerUnit;
+  // derivatives before the discards (they are undefined after divergent control flow)
+  float fp = max(fwidth(p.x), fwidth(p.y));
   if (uHide.x > 0.0 && abs(vSurf.x) < uHide.x) {
     float dc = mod(vSurf.y - uHide.y + 0.5 * uHide.w, uHide.w) - 0.5 * uHide.w;
     if (abs(dc) < uHide.z) discard;
   }
-  vec2 p = vSurf * uKmPerUnit;
   if (uHole.w > 0.0 && p.x > uHole.x && p.x < uHole.y && abs(p.y) < uHole.z) discard;
   vec3 Ng = normalize(vN);
   vec3 T = normalize(vT - Ng * dot(vT, Ng));
@@ -201,7 +203,6 @@ void main() {
   vec2 lt = vec2(dot(L, T), dot(L, B));
   float lh = max(length(lt), 1e-4);
   vec3 sunT = vec3(lt / lh, dot(L, Ng) / lh);
-  float fp = max(fwidth(p.x), fwidth(p.y));
   HrShell s = hr_shell(p, fp, sunT);
   // flattened apron around the port
   float ap = 1.0;
@@ -223,7 +224,7 @@ void main() {
   vec3 col = alb * uSunColor * lit * flux;
   col += alb * uAmbient;
   // thin lit rim on the star side
-  float nv = max(dot(Ng, V), 0.0);
+  float nv = clamp(dot(Ng, V), 0.0, 1.0); // pow() of a negative base is NaN on Direct3D
   float far = smoothstep(1.5, 14.0, length(cameraPosition - vW));
   col += uSunColor * flux * uRim * far * pow(1.0 - nv, 6.0) * smoothstep(-0.12, 0.3, dot(Ng, L));
   gl_FragColor = vec4(col, vCover);

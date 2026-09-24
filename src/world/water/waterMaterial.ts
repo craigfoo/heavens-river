@@ -100,7 +100,9 @@ void main() {
     gl_FragColor = vec4(col, 1.0);
     return;
   }
-  float NdV = max(dot(n, V), 0.0);
+  // clamp to 1 as well: rounding can push the dot a hair above 1, and pow() of
+  // a negative base is NaN on Direct3D
+  float NdV = clamp(dot(n, V), 0.0, 1.0);
   float F = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
   vec3 r = reflect(-V, n);
   vec3 rl = vec3(c * r.x + s * r.y, -s * r.x + c * r.y, r.z);

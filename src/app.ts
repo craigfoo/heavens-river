@@ -293,7 +293,8 @@ export class App {
     this.birds.update(simDt, cam, this.player);
     this.hatch.update(dt, this.player.s, this.player.z);
     this.bulkheads.update();
-    this.sky.update(Z_MIN - frame.originZ, Z_MAX - frame.originZ);
+    const pixelAngle = (2 * Math.tan((this.camera.fov * Math.PI) / 360)) / Math.max(1, this.pipeline.renderer.domElement.height);
+    this.sky.update(Z_MIN - frame.originZ, Z_MAX - frame.originZ, pixelAngle);
     if (render) {
       if (this.renderOverride) this.renderOverride(dt);
       else this.pipeline.render(dt);

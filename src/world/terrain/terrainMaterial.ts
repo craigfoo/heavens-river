@@ -69,7 +69,10 @@ vec3 cropColor(float h) {
 // Fields are laid out per farm region (jittered ~1.1 km Voronoi cells): each
 // region has its own orientation and plot size, some are long strip fields,
 // and hedges run along both plot and region boundaries.
-vec3 fields(vec2 wb, float dist, vec3 base) {
+// dwx / dwy: screen-space derivatives of wb, taken by the caller outside any
+// per-pixel branch (derivatives inside divergent branches are undefined, and
+// some GPU drivers return Inf/NaN there)
+vec3 fields(vec2 wb, vec2 dwx, vec2 dwy, float dist, vec3 base) {
   const float RC = 1100.0;
   vec2 rc = floor(wb / RC);
   float d1 = 1e12;
@@ -102,7 +105,9 @@ vec3 fields(vec2 wb, float dist, vec3 base) {
   crop *= 0.9 + 0.2 * tNoise(wb * 0.05);
   float along = hh > 0.5 ? q.x : q.y;
   float rowC = along / 0.95;
-  float aa = fwidth(rowC);
+  // derivative of 'along' from the rotation applied to wb
+  vec2 ax = hh > 0.5 ? vec2(ca, -sa) : vec2(sa, ca);
+  float aa = (abs(dot(ax, dwx)) + abs(dot(ax, dwy))) / 0.95;
   float rows = 0.5 + 0.5 * sin(rowC * 6.2831853);
   float rowFade = (1.0 - smoothstep(30.0, 160.0, dist)) * (1.0 - smoothstep(0.25, 0.6, aa));
   float furrow = (h < 0.5 || (h > 0.56 && h < 0.88)) ? 0.35 : 0.12;
@@ -120,7 +125,7 @@ float caustics(vec2 p, float t) {
   vec2 q = p * 0.55;
   float a = tNoise(q + vec2(t * 0.35, t * 0.21));
   float b = tNoise(q * 1.37 - vec2(t * 0.27, -t * 0.19) + 5.1);
-  return pow(1.0 - abs(a - b), 9.0);
+  return pow(max(1.0 - abs(a - b), 0.0), 9.0);
 }
 `;
 
@@ -149,10 +154,13 @@ const fragmentColor = /* glsl */ `
   col *= 1.0 + rock * ((strata - 0.5) * 0.25 * mid + (n2 - 0.5) * 0.3 * fine + (n0 - 0.5) * 0.2);
   // sand / mud speckle
   col *= 1.0 + sand * ((n3 - 0.5) * 0.25 * fine + (n1 - 0.5) * 0.15);
-  if (farm > 0.02) {
-    vec2 wb = hrWorldSZ(wpos, uOriginModBig, 65536.0);
-    col = mix(col, fields(wb, dist, col), farm);
-  }
+  vec2 wb = hrWorldSZ(wpos, uOriginModBig, 65536.0);
+  vec2 wbx = dFdx(wb);
+  vec2 wby = dFdy(wb);
+  // the 65 km pattern wrap makes one huge derivative; ignore it
+  if (dot(wbx, wbx) > 1e6) wbx = vec2(0.0);
+  if (dot(wby, wby) > 1e6) wby = vec2(0.0);
+  if (farm > 0.02) col = mix(col, fields(wb, wbx, wby, dist, col), farm);
   // snow
   float snow = vTColor.a;
   if (snow > 0.0) col = mix(col, vec3(0.88, 0.9, 0.95) * (0.92 + 0.1 * n1), snow);

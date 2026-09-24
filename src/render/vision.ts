@@ -32,14 +32,14 @@ vec4 subSample(sampler2D t, vec3 d, float a) {
   vec3 q = vec3(d.x * c + d.z * s, d.y, -d.x * s + d.z * c);
   vec2 p = vec2(q.x, q.y) / max(-q.z, 1e-4);
   vec2 uv = p / uSubTan * 0.5 + 0.5;
-  return texture2D(t, clamp(uv, 0.0, 1.0));
+  return textureLod(t, clamp(uv, 0.0, 1.0), 0.0);
 }
 
 void main() {
   if (uMode == 1) {
     // independent eyes: left eye on the left half
     vec2 uv = vUv;
-    vec4 c = uv.x < 0.5 ? texture2D(t0, vec2(uv.x * 2.0, uv.y)) : texture2D(t1, vec2(uv.x * 2.0 - 1.0, uv.y));
+    vec4 c = uv.x < 0.5 ? textureLod(t0, vec2(uv.x * 2.0, uv.y), 0.0) : textureLod(t1, vec2(uv.x * 2.0 - 1.0, uv.y), 0.0);
     float edge = abs(uv.x - 0.5);
     c.rgb *= smoothstep(0.0, 0.006, edge);
     gl_FragColor = c;

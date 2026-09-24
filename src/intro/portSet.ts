@@ -80,6 +80,9 @@ void main() {
   vec3 N = normalize(vN);
   vec2 uv = abs(N.y) > 0.6 ? vW.xz : (abs(N.x) > 0.6 ? vW.zy : vW.xy);
   vec2 fw = fwidth(uv) + 1e-4;
+  // world-space derivatives for the per-kind details, taken outside those branches
+  float fxW = fwidth(vW.x) + 1e-4;
+  float fyW = fwidth(vW.y) + 1e-4;
   // large cast panels with fine seams and vertical weathering
   float seams = max(hr_bar(uv.x / 48.0, 0.01, fw.x / 48.0), hr_bar(uv.y / 24.0, 0.018, fw.y / 24.0));
   float grime = hr_vn2(uv / 57.0, 0.0).x * 0.6 + hr_vn2(uv / 9.0, 0.0).x * 0.4;
@@ -107,8 +110,8 @@ void main() {
     col += vec3(0.9, 0.7, 0.35) * 0.05 * edge;
   } else if (vKind < 2.5 && vKind > 1.5) {
     // end wall: a lit frame around the mouth
-    float fx = fwidth(vW.x) + 1e-4;
-    float fy = fwidth(vW.y) + 1e-4;
+    float fx = fxW;
+    float fy = fyW;
     float dx = max(abs(vW.x) - ${TR.mouthHalf.toFixed(1)}, 0.0);
     float dy = max(vW.y - ${TR.mouthTop.toFixed(1)}, 0.0);
     float dd = length(vec2(dx, dy));
@@ -127,8 +130,8 @@ void main() {
     col = inner * warm * (0.12 + (N.y > 0.5 ? 0.9 * pool : 0.35 * smoothstep(-200.0, -112.0, vW.y)));
     if (vKind > 3.5) {
       // bay doors to the transfer tracks: a lit outline and amber beacons
-      float fx = fwidth(vW.x) + 1e-4;
-      float fy = fwidth(vW.y) + 1e-4;
+      float fx = fxW;
+      float fy = fyW;
       float door = max(hr_box(ax, 38.0, 39.0, fx) * step(vW.y, -140.0), hr_box(vW.y, -141.0, -140.0, fy) * step(ax, 39.0));
       col += warm * 3.0 * door;
     }

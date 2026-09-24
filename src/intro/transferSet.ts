@@ -105,13 +105,16 @@ void main() {
   float fu = fwidth(u);
   float r = uBlur + 0.6 * fu;
   float part = floor(vPart + 0.5);
+  // derivatives outside the per-part branches (undefined inside them on some drivers)
+  float fxP = fwidth(vP.x) + 1e-4;
+  float fyP = fwidth(vP.y) + 1e-4;
   vec3 lampC = vec3(0.72, 0.86, 1.0);
   float light = lampLight(u, r);
   float dist = length(vP);
   vec3 col = vec3(0.0);
   if (part == 0.0) {
     // floor: transverse grooves, reflector studs
-    float fx = fwidth(vP.x) + 1e-4;
+    float fx = fxP;
     vec3 alb = vec3(0.04, 0.043, 0.048);
     alb *= 1.0 - 0.5 * hr_bar(u / 3.0, 0.08, r / 3.0);
     float wallGlow = smoothstep(4.0, 9.0, abs(vP.x));
@@ -120,12 +123,12 @@ void main() {
     col += vec3(1.0, 0.5, 0.12) * 6.0 * stud;
   } else if (part == 1.0) {
     // guideway sides: a continuous running light
-    float fy = fwidth(vP.y) + 1e-4;
+    float fy = fyP;
     col = vec3(0.03) * light;
     col += vec3(0.25, 0.55, 1.0) * 2.5 * hr_box(vP.y, -1.95, -1.87, fy);
   } else if (part == 2.0) {
     // guideway top: polished rails reflecting the lamps, joints and centre dashes
-    float fx = fwidth(vP.x) + 1e-4;
+    float fx = fxP;
     vec3 alb = vec3(0.06, 0.062, 0.07) * (1.0 - 0.6 * hr_bar(u / 18.0, 0.03, r / 18.0));
     col = alb * lampC * light * 0.8;
     float rail = hr_box(abs(vP.x), 1.15, 1.45, fx);
@@ -135,7 +138,7 @@ void main() {
     col += vec3(1.0, 0.75, 0.4) * 1.2 * dash;
   } else if (part == 3.0) {
     // walls: panels, ribs, glowing lamp strips, an amber stripe, distance boards
-    float fy = fwidth(vP.y) + 1e-4;
+    float fy = fyP;
     float y = vP.y;
     vec3 alb = vec3(0.05, 0.053, 0.06);
     float seam = max(hr_bar(u / 3.0, 0.03, r / 3.0), hr_box(y, 0.45, 0.55, fy) + hr_box(y, 4.9, 5.0, fy));
@@ -151,7 +154,7 @@ void main() {
     col += vec3(0.9, 0.95, 1.0) * 1.2 * board;
   } else if (part == 4.0) {
     // chamfer: small downlights
-    float fy = fwidth(vP.y) + 1e-4;
+    float fy = fyP;
     col = vec3(0.04) * lampC * light;
     col += lampC * 7.0 * hr_pulse(u / 15.0 + 0.25, 0.05, r / 15.0) * hr_box(vP.y, 8.25, 8.55, fy);
   } else if (part == 5.0) {
@@ -160,7 +163,7 @@ void main() {
     col = alb * lampC * light;
   } else {
     // slot edges: magnetic bearing strips
-    float fy = fwidth(vP.y) + 1e-4;
+    float fy = fyP;
     col = vec3(0.025) * light;
     col += vec3(0.45, 0.5, 1.0) * 3.5 * hr_box(vP.y, 9.75, 9.88, fy);
     col += vec3(0.45, 0.5, 1.0) * 1.4 * hr_box(vP.y, 10.25, 10.32, fy);
@@ -268,7 +271,7 @@ varying vec3 vL;
 void main() {
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vP);
-  float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
   float u = -vP.z + uOff;
   vec3 lampC = vec3(0.78, 0.9, 1.0);
   vec3 col;

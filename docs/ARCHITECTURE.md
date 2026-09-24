@@ -66,3 +66,14 @@ The F3 panel (`ui/debugPanel.ts`) tunes time, haze, LOD and vision live, jumps b
 There is no unit-test suite. Development used headless Chromium (Playwright with SwiftShader) driving `?test` mode: step the simulation, wait for the workers, render, and compare screenshots. `npm run build` type-checks the whole project. The model and intro have standalone preview pages at `/src/npc/preview.html` and `/src/intro/preview.html` in the dev server.
 
 Frame rates were only measured with software rendering, so they say nothing about real GPUs. Quality presets (Settings → Graphics) scale terrain detail, shadows, grass density, pixel ratio and the vision render size.
+
+## Shader portability
+
+On Windows, Chrome and Edge run WebGL through ANGLE on Direct3D 11, where some GLSL that is merely "undefined" elsewhere turns into NaN pixels. The bloom's mip chain then smears those into flickering black blocks. Software rendering hides all of this, so keep to these rules:
+
+- Take derivatives (`fwidth`, `dFdx`, `dFdy`) and implicit-LOD texture reads at the top level of `main`, never inside a branch that can differ between neighbouring pixels or after a `discard`. Use `textureLod` inside branches.
+- Clamp every `pow` base to be non-negative. A Fresnel term needs `clamp(dot(N, V), 0.0, 1.0)`, because the dot of two unit vectors can round a hair above 1.
+- Give every local a value on every path, and prefer one `return` at the end of a function. ANGLE does not zero uninitialized variables on all drivers.
+- Two safety nets catch what slips through, but they do not replace the rules above:
+  - In the world, the god-ray pass (`render/sunShafts.ts`) always runs, even with rays off, and clamps any NaN or Inf pixel to a finite value before bloom.
+  - In the intro, `F_POST` (`intro/glsl.ts`) clamps each scene shader's output.

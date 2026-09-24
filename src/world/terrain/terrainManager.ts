@@ -469,19 +469,19 @@ function createFarShellMaterial(): MeshLambertMaterial {
     vertexBegin: `vFColor = vec4(pow(aColor.rgb, vec3(2.2)), aColor.a);`,
     fragmentPars: `uniform vec2 uNearS; uniform vec2 uNearZ; uniform vec2 uOrigin; uniform sampler2D uRivers; varying vec4 vFColor;
       // silver threads: the main rivers drawn from their centrelines, far finer than the shell's grid
-      float hrRiverThreads(float s, float z) {
+      float hrRiverThreads(float s, float z, float sw) {
         float u = (z - ${Z_MIN.toFixed(1)}) / ${(Z_MAX - Z_MIN).toFixed(1)} * ${RIVER_SAMPLES.toFixed(1)} - 0.5;
         float i0 = clamp(floor(u), 0.0, ${(RIVER_SAMPLES - 2).toFixed(1)});
         float f = clamp(u - i0, 0.0, 1.0);
         float m = 0.0;
         for (int r = 0; r < 4; r++) {
           float v = (float(r) + 0.5) / 4.0;
-          vec4 a = texture2D(uRivers, vec2((i0 + 0.5) / ${RIVER_SAMPLES.toFixed(1)}, v));
-          vec4 b = texture2D(uRivers, vec2((i0 + 1.5) / ${RIVER_SAMPLES.toFixed(1)}, v));
+          vec4 a = textureLod(uRivers, vec2((i0 + 0.5) / ${RIVER_SAMPLES.toFixed(1)}, v), 0.0);
+          vec4 b = textureLod(uRivers, vec2((i0 + 1.5) / ${RIVER_SAMPLES.toFixed(1)}, v), 0.0);
           float rs = mix(a.x, b.x, f);
           float hw = mix(a.y, b.y, f);
           float ds = mod(s - rs + ${(CIRC / 2).toFixed(1)}, ${CIRC.toFixed(1)}) - ${(CIRC / 2).toFixed(1)};
-          float aa = fwidth(ds) * 0.8 + 1.0;
+          float aa = sw * 0.8 + 1.0;
           m = max(m, (1.0 - smoothstep(hw - aa, hw + aa, abs(ds))) * step(1.0, hw));
         }
         return m;
@@ -489,6 +489,8 @@ function createFarShellMaterial(): MeshLambertMaterial {
     fragmentColor: `
       {
         float dsf = uR * atan(vHrWorld.x, uR - vHrWorld.y);
+        // derivatives before the discard (they are undefined after divergent control flow)
+        float dsfW = min(fwidth(dsf), 5000.0);
         if (dsf > uNearS.x && dsf < uNearS.y && vHrWorld.z > uNearZ.x && vHrWorld.z < uNearZ.y) discard;
         // the shell's ~2 km colour cells alias the farm/forest pattern into blotches:
         // pull vegetation toward a regional olive so the far side reads as land, not cloud
@@ -496,7 +498,7 @@ function createFarShellMaterial(): MeshLambertMaterial {
         float veg = (1.0 - vFColor.a) * step(fc.b, 0.8 * fc.g);
         fc = mix(fc, vec3(0.17, 0.23, 0.09) * (0.75 + 0.5 * dot(fc, vec3(0.3, 0.59, 0.11)) / 0.25), 0.5 * veg);
         diffuseColor.rgb *= fc;
-        float river = hrRiverThreads(uOrigin.x + dsf, uOrigin.y + vHrWorld.z);
+        float river = hrRiverThreads(uOrigin.x + dsf, uOrigin.y + vHrWorld.z, dsfW);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.68, 0.76), river);
       }
     `,

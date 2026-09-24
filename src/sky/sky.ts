@@ -34,6 +34,7 @@ uniform vec3 uTubeColor;
 uniform float uTubeRadius;
 uniform vec2 uTubeZone;
 uniform vec3 uFarLand;
+uniform float uPixelAngle;
 varying vec3 vDir;
 
 void main() {
@@ -58,14 +59,16 @@ void main() {
   vec3 base = hitsWall ? uFarLand * (0.35 + 0.65 * uSunColor * 0.3) : uAmbientScatter;
   vec3 col = hrComposite(base, p, c);
 
-  // light tube along the axis (visible when the hologram is off)
-  if (A > 1e-9) {
+  // light tube along the axis (visible only when the hologram is off; the
+  // axis lies inside the hologram shell). No derivatives in here: they are
+  // undefined inside per-pixel branches and some drivers return Inf/NaN.
+  if (A > 1e-9 && uHoloOn < 0.999) {
     vec2 toAxis = vec2(0.0, uR) - c.xy;
     float tc = dot(toAxis, d.xy) / A;
     if (tc > 0.0 && tc < D) {
       vec3 pc = c + d * tc;
       float dist = length(pc.xy - vec2(0.0, uR));
-      float px = max(fwidth(dist), 1.0);
+      float px = max(tc * uPixelAngle * 1.5, 1.0);
       float core = smoothstep(uTubeRadius + px, uTubeRadius - px, dist);
       float halo = exp(-dist / (uTubeRadius * 10.0)) * 0.25 + exp(-dist / (uTubeRadius * 60.0)) * 0.05;
       float zq = (pc.z - uTubeZone.x) / 60000.0;
@@ -94,6 +97,7 @@ export class SkyBackground {
         ...U,
         uZRange: { value: new Vector2(-1e7, 1e7) },
         uFarLand: { value: U.uHemiGround.value.clone().multiplyScalar(0.8) },
+        uPixelAngle: { value: 0.001 },
       },
       depthWrite: false,
       depthTest: true,
@@ -104,7 +108,9 @@ export class SkyBackground {
     this.mesh.renderOrder = 1_000_000;
   }
 
-  update(zMinRender: number, zMaxRender: number) {
+  /** pixelAngle: angle subtended by one screen pixel (radians), for anti-aliasing the tube. */
+  update(zMinRender: number, zMaxRender: number, pixelAngle = 0.001) {
     this.material.uniforms.uZRange.value.set(zMinRender, zMaxRender);
+    this.material.uniforms.uPixelAngle.value = pixelAngle;
   }
 }

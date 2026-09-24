@@ -1265,12 +1265,17 @@ QPose qSmile( float t, float ph, float v ) {
 }
 
 QPose qPoseFor( float g, float t, float ph, float v ) {
-  if ( g < 0.5 ) return qIdle( t, ph, v );
-  if ( g < 1.5 ) return qWalk( t, ph, v );
-  if ( g < 2.5 ) return qRun( t, ph, v );
-  if ( g < 3.5 ) return qSwim( t, ph, v );
-  if ( g < 4.5 ) return qSing( t, ph, v );
-  return qSmile( t, ph, v );
+  // one exit, fully assigned on every path: Direct3D's compiler flags early
+  // struct returns as "potentially uninitialized", and ANGLE on some drivers
+  // does not zero such variables, which can throw vertices across the screen
+  QPose P = qRest( v );
+  if ( g < 0.5 ) P = qIdle( t, ph, v );
+  else if ( g < 1.5 ) P = qWalk( t, ph, v );
+  else if ( g < 2.5 ) P = qRun( t, ph, v );
+  else if ( g < 3.5 ) P = qSwim( t, ph, v );
+  else if ( g < 4.5 ) P = qSing( t, ph, v );
+  else P = qSmile( t, ph, v );
+  return P;
 }
 
 QPose qMixPose( QPose a, QPose b, float k ) {

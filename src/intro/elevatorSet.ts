@@ -98,13 +98,14 @@ varying vec3 vW;
 varying vec3 vN;
 varying vec2 vUv;
 void main() {
-  // the landing opening toward the hatch passage, once the cab has arrived
-  if (uLanding > 0.5 && abs(vW.x) < ${(CORRIDOR.half + 0.05).toFixed(2)} && vW.z < 0.0 && vW.y > -0.05 && vW.y < ${(CORRIDOR.height + 0.05).toFixed(2)}) discard;
   float Y = vW.y + uDepth;
   float fy = fwidth(Y);
-  float r = uBlur + 0.6 * fy;
   float ang = atan(vW.z, vW.x) * ${SHAFT_R.toFixed(1)};
   float fa = fwidth(ang) + 1e-4;
+  // the landing opening toward the hatch passage, once the cab has arrived
+  // (after the derivatives, which are undefined after a divergent discard)
+  if (uLanding > 0.5 && abs(vW.x) < ${(CORRIDOR.half + 0.05).toFixed(2)} && vW.z < 0.0 && vW.y > -0.05 && vW.y < ${(CORRIDOR.height + 0.05).toFixed(2)}) discard;
+  float r = uBlur + 0.6 * fy;
   vec3 lampC = vec3(1.0, 0.88, 0.7);
   vec3 alb = vec3(0.055, 0.055, 0.06);
   float seam = max(hr_bar(Y / 3.0, 0.04, r / 3.0), hr_bar(ang / 2.5, 0.025, fa / 2.5));
@@ -145,7 +146,7 @@ varying vec2 vUv;
 void main() {
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vW);
-  float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0);
+  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 4.0);
   vec3 alb = uAlb;
   // brushed metal: fine vertical grain
   float grain = hr_vn2(vec2(vW.x * 60.0 + vW.z * 60.0, vW.y * 1.5), 0.0).x;
@@ -216,7 +217,7 @@ void main() {
     float x = p.x * (2.5 + fi * 1.7) + fi * 7.3;
     float h = hz + 0.02 - fi * 0.07;
     h += 0.045 * (hr_vn2(vec2(x, fi), 0.0).x - 0.5) + 0.02 * (hr_vn2(vec2(x * 3.1, fi + 9.0), 0.0).x - 0.5);
-    h += (0.5 - fi * 0.12) * pow(p.x - 0.5, 2.0) * (fi < 2.0 ? 1.0 : 0.3);
+    h += (0.5 - fi * 0.12) * (p.x - 0.5) * (p.x - 0.5) * (fi < 2.0 ? 1.0 : 0.3);
     float m = 1.0 - smoothstep(h - 0.004, h + 0.004, p.y);
     vec3 hill = mix(haze, vec3(0.24, 0.15, 0.07), fi / 3.0);
     hill = mix(hill, vec3(0.22, 0.24, 0.08), 0.3 * fi / 3.0);

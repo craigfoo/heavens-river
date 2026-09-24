@@ -16,6 +16,10 @@ export const F_PRE = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
 `;
 export const F_POST = /* glsl */ `
+// Direct3D turns some undefined math into NaN, and the post pass's mip-chain
+// bloom would spread one bad pixel into a black block, so clamp it away here
+// (NaN clamps to 0 on the GPUs that produce it)
+gl_FragColor = clamp(gl_FragColor, 0.0, 65000.0);
 #include <logdepthbuf_fragment>
 `;
 
