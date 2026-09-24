@@ -71,6 +71,8 @@ export interface TownResult {
   perches: Float32Array;
   /** Painted buildings: (ds, dz, h, reach radius, seed). */
   murals: Float32Array;
+  /** Trees in squares and gardens, in the terrain's tree format (TREE_STRIDE floats each). */
+  trees: Float32Array;
   poi: TownPoi;
   buildingCount: number;
   genMs: number;
@@ -220,6 +222,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
   const waypoints: number[] = [];
   const perches: number[] = [];
   const murals: number[] = [];
+  const trees: number[] = [];
   let poi: TownPoi | null = null;
 
   for (const B of layout.banks) {
@@ -411,15 +414,10 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     }
     // signpost
     nearOnly(B.signpost.a, (mb) => buildSignpost(mb, B.signpost.a, B.signpost.c, ground));
-    // trees in squares and gardens (as simple crowns on trunks)
+    // trees in squares and gardens: drawn with the countryside's instanced trees
     for (const t of B.trees) {
-      both(t.a, (mb, detail) => {
-        const base = ground(t.a, t.c);
-        mb.frame(t.a, 0, t.c, 0);
-        mb.cylinder(0, 0, base, base + 2.6 * t.scale, 0.18 * t.scale, 0.12 * t.scale, detail ? 6 : 4, lin('#4a3424'), SURF.timber, 0.2);
-        mb.ellipsoid(0, base + 3.8 * t.scale, 0, 2.1 * t.scale, 1.8 * t.scale, 2.1 * t.scale, detail ? 10 : 5, t.type === 3 ? lin('#5a8a34') : lin('#3e6a26'), SURF.turf, 0.8);
-        mb.resetFrame();
-      });
+      const p = map.pos(t.a, ground(t.a, t.c) - 0.1, t.c);
+      trees.push(p[0], p[1], p[2], 0.75 * t.scale, rng.next() * Math.PI * 2, t.type, rng.next(), 0);
     }
     // ---- cross-river bridges (built once, from the primary bank frame)
     if (B.side === site.side) {
@@ -506,6 +504,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     waypoints: new Float32Array(waypoints),
     perches: new Float32Array(perches),
     murals: new Float32Array(murals),
+    trees: new Float32Array(trees),
     poi: poi ?? { dock: [0, 0, site.level, 0], signpost: [0, 0, site.level], market: [0, 0, site.level], gate: [0, 0, site.level, 0] },
     buildingCount: layout.buildingCount,
     genMs: performance.now() - t0,
@@ -567,7 +566,7 @@ function addFloor(out: number[], map: Mapper, a0: number, a1: number, c0: number
 }
 
 export function townTransferables(r: TownResult): Transferable[] {
-  const t: Transferable[] = [r.colliders.buffer, r.floors.buffer, r.waypoints.buffer, r.perches.buffer, r.murals.buffer];
+  const t: Transferable[] = [r.colliders.buffer, r.floors.buffer, r.waypoints.buffer, r.perches.buffer, r.murals.buffer, r.trees.buffer];
   const seen = new Set<ArrayBufferLike>();
   for (const tile of r.tiles)
     for (const m of [tile.near, tile.far])

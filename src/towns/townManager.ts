@@ -1,11 +1,12 @@
 // Streams settlements in and out around the camera, swaps per-tile LODs, and
 // answers collision / floor / point-of-interest queries for gameplay.
 
-import { BufferAttribute, BufferGeometry, Group, Mesh, Sphere, Vector3, type Material } from 'three';
+import { BufferAttribute, BufferGeometry, Group, Mesh, Sphere, Vector3, type InstancedMesh, type Material } from 'three';
 import { frame, wrapS } from '../coords/cylinder';
 import type { TownSite } from '../world/gen/settlements';
 import type { WorldGen } from '../world/gen/world';
 import type { TerrainWorkerPool } from '../world/terrain/workerPool';
+import type { TreeRenderer } from '../world/vegetation/trees';
 import type { Collider } from '../world/worldQuery';
 import type { TownMesh, TownPoi, TownResult } from './townBuilder';
 import { createTownDepthMaterial, createTownMaterial } from './townMaterial';
@@ -29,6 +30,8 @@ export interface LoadedTown {
   waypoints: Float32Array;
   perches: Float32Array;
   murals: Float32Array;
+  /** Square and garden trees (instanced with the countryside's trees). */
+  trees: InstancedMesh | null;
   poi: TownPoi;
   colGrid: Map<number, number[]>;
   floorGrid: Map<number, number[]>;
@@ -53,6 +56,8 @@ export class TownManager implements Collider {
   private frameNo = 0;
   onLoaded: ((t: LoadedTown) => void)[] = [];
   onUnloaded: ((t: LoadedTown) => void)[] = [];
+  /** Draws the towns' trees (set by the app to the terrain's tree renderer). */
+  treeRenderer: TreeRenderer | null = null;
   stats = { loaded: 0, tris: 0 };
 
   constructor(pool: TerrainWorkerPool, gen: WorldGen) {
@@ -209,6 +214,7 @@ export class TownManager implements Collider {
       waypoints: r.waypoints,
       perches: r.perches,
       murals: r.murals,
+      trees: this.treeRenderer ? this.treeRenderer.add(r.trees, r.anchorS, r.anchorZ, 9) : null,
       poi: r.poi,
       colGrid,
       floorGrid,
@@ -227,6 +233,7 @@ export class TownManager implements Collider {
         m.geometry.dispose();
       }
     }
+    if (t.trees && this.treeRenderer) this.treeRenderer.remove(t.trees);
     this.loaded.delete(t.site.id);
     for (const f of this.onUnloaded) f(t);
   }

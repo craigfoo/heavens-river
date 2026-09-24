@@ -12,6 +12,7 @@ import {
   MeshDepthMaterial,
   MeshDistanceMaterial,
   RGBADepthPacking,
+  type MeshDepthMaterialParameters,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
 import { atmosphereParsGlsl } from './atmosphereGlsl';
@@ -148,8 +149,9 @@ export function patchWorldMaterial<T extends Material>(material: T, o: PatchOpti
 }
 
 /** Depth material for shadow maps of bent geometry. */
-export function makeBentDepthMaterial(key: string, o: Partial<PatchOptions> = {}): MeshDepthMaterial {
-  const m = new MeshDepthMaterial({ depthPacking: RGBADepthPacking });
+export function makeBentDepthMaterial(key: string, o: Partial<PatchOptions> = {}, params: MeshDepthMaterialParameters = {}): MeshDepthMaterial {
+  // params: e.g. { map, alphaTest, side } for alpha-tested foliage
+  const m = new MeshDepthMaterial({ depthPacking: RGBADepthPacking, ...params });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, U, o.uniforms ?? {});
     let vs = shader.vertexShader;

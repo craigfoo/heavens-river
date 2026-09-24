@@ -102,6 +102,7 @@ export class App {
     this.scene.add(this.terrain.group);
     this.scene.add(this.grass.group);
     this.towns = new TownManager(this.terrain.pool, this.gen);
+    this.towns.treeRenderer = this.terrain.trees;
     this.scene.add(this.towns.group);
     this.world.colliders.push(this.towns);
     this.life = new TownLife(this.towns, this.world);
