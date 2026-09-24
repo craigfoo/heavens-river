@@ -1,7 +1,9 @@
 // Continuous ambient beds built on the shared noise loops.
-//  River: broadband rush (louder and brighter with current speed), a low body
-//    roar for big fast water, lapping wavelets (a noise band swelled by
-//    scheduled events) and droplet plips that become a babble on fast streams.
+//  River: an airy rush (louder and brighter with current speed), soft lapping
+//    wavelets (a noise band swelled by scheduled events) and droplet plips
+//    that become a babble on fast streams. Calm water is kept out of the low
+//    end, where noise reads as traffic rather than water; only fast, heavy
+//    water adds a low body roar.
 //  Wind: band-passed noise whose level and centre follow a random gust
 //    process, tonal whistling over ridges when exposure is high, and low
 //    buffeting in strong gusts.
@@ -13,9 +15,9 @@ import { SmoothParam, clamp01, expLerp, rand, smoothstep } from './util';
 
 /** Level trims (linear), calibrated by measuring RMS in a headless browser. */
 const LVL = {
-  rush: 0.5,
-  body: 0.6,
-  lap: 1.2,
+  rush: 0.6,
+  body: 0.5,
+  lap: 1.4,
   plip: 0.05,
   wind: 0.6,
   whistle: 0.5,
@@ -51,22 +53,24 @@ export class RiverLayer {
     this.out.connect(dest);
     const pink = loopSource(ctx, k.noise.pink, 1);
     const brown = loopSource(ctx, k.noise.brown, 0.9);
-    // rush: broadband hiss of moving water
-    const hp = bq(ctx, 'highpass', 180, 0.5);
+    // rush: the airy hiss of moving water, kept above the rumble range
+    const hp = bq(ctx, 'highpass', 400, 0.6);
     const lp = bq(ctx, 'lowpass', 2000, 0.5);
     const rushG = gn(ctx);
     pink.connect(hp);
     hp.connect(lp);
     lp.connect(rushG);
     rushG.connect(this.out);
-    // body: the low roar of a big mass of water
+    // body: the low roar of fast, heavy water (none below 60 Hz)
+    const bhp = bq(ctx, 'highpass', 60, 0.6);
     const blp = bq(ctx, 'lowpass', 300, 0.6);
     const bodyG = gn(ctx);
-    brown.connect(blp);
+    brown.connect(bhp);
+    bhp.connect(blp);
     blp.connect(bodyG);
     bodyG.connect(this.out);
     // lapping: a noise band swelled by scheduled wavelets
-    this.lapBand = bq(ctx, 'bandpass', 520, 1.1);
+    this.lapBand = bq(ctx, 'bandpass', 700, 0.9);
     this.lapGain = gn(ctx);
     const lapLevel = gn(ctx);
     pink.connect(this.lapBand);
@@ -88,8 +92,9 @@ export class RiverLayer {
     if (ctl) {
       const rush = smoothstep(0.05, 2.5, speed);
       this.rush.set(Math.pow(prox, 1.6) * (0.2 + 0.8 * rush) * (0.85 + 0.3 * this.wander) * LVL.rush, now);
-      this.rushTone.set(expLerp(800, 5200, this.bright * 0.8 + this.wander * 0.2), now);
-      this.body.set(Math.pow(prox, 1.3) * rush * LVL.body, now);
+      this.rushTone.set(expLerp(1400, 6000, this.bright * 0.8 + this.wander * 0.2), now);
+      // the roar only where the water is really moving (rapids, fast streams)
+      this.body.set(Math.pow(prox, 1.3) * smoothstep(1.8, 4.5, speed) * LVL.body, now);
       this.lapLevel.set(prox * prox * (1 - 0.5 * rush) * LVL.lap, now);
     }
     this.schedule(now);
@@ -103,13 +108,14 @@ export class RiverLayer {
       return;
     }
     if (this.nextLap < now) this.nextLap = now;
+    // wavelets: slow, soft swells with an unhurried rhythm
     while (this.nextLap < horizon) {
       const t = this.nextLap;
-      const rise = rand(0.08, 0.2);
-      this.lapBand.frequency.setTargetAtTime(rand(380, 760), t, 0.08);
-      this.lapGain.gain.setTargetAtTime(rand(0.35, 1), t, rise / 2);
-      this.lapGain.gain.setTargetAtTime(0.05, t + rise, rand(0.12, 0.3));
-      this.nextLap += rise + rand(0.2, 0.8);
+      const rise = rand(0.15, 0.35);
+      this.lapBand.frequency.setTargetAtTime(rand(500, 1100), t, 0.12);
+      this.lapGain.gain.setTargetAtTime(rand(0.35, 1), t, rise / 3);
+      this.lapGain.gain.setTargetAtTime(0.06, t + rise, rand(0.2, 0.45));
+      this.nextLap += rise + rand(0.35, 1.1);
     }
     // droplets: sparse beside a big river, a busy babble on fast streams
     const rate = this.prox * this.prox * (0.25 + 5 * this.bright);

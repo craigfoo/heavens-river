@@ -3,7 +3,7 @@
 // from oscillators, a few shared looping noise buffers and filters.
 //
 //   ambience beds (river, wind, wildlife, town, barge) ─ stall ─┐
-//   world one-shots (steps, Anek's bird), reverb return ────────┴─ world
+//   world one-shots (steps, Anek's bird, splashes), reverb ─────┴─ world
 //   world ─ underwater low-pass ─ air ─┐
 //   underwater bed (rumble, bubbles) ──┼─ duck (menus) ─┐
 //   direct one-shots (splash, dive) ───┘                ├─ master ─ compressor ─ soft clip ─ out
@@ -205,6 +205,11 @@ export class AudioEngine {
 
   splash(intensity: number): void {
     this.fx((g) => g.sfx.splash(fin(intensity, 0.5)));
+  }
+
+  /** Someone else's splash: level 0..1 (scaled for distance), pan -1..1. */
+  splashAway(level: number, pan: number): void {
+    this.fx((g) => g.sfx.splashAway(fin(level, 0), fin(pan, 0)));
   }
 
   step(surface: 'grass' | 'stone' | 'wood' | 'water', quad: boolean): void {

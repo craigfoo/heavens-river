@@ -43,10 +43,16 @@ export class AudioBridge {
       if (v > 7) e.step(this.surface, false);
     };
     p.events.onStep = (quad) => e.step(this.surface, quad);
+    // townsfolk diving in: a soft splash that fades with distance, placed
+    // left or right (never the full splash of your own jump)
     app.life.onSplash = (s, z) => {
       const c = app.cameraPose();
-      const d = Math.hypot(wrapS(s - c.s), z - c.z);
-      if (d < 70) e.splash(0.5 * (1 - d / 70));
+      const ds = wrapS(s - c.s);
+      const dz = z - c.z;
+      const d = Math.hypot(ds, dz);
+      if (d >= 55) return;
+      const pan = d > 0.5 ? (ds * Math.cos(c.yaw) - dz * Math.sin(c.yaw)) / d : 0;
+      e.splashAway((1 - d / 55) ** 2, pan);
     };
     app.birds.onTakeoff = (s, z) => {
       const c = app.cameraPose();

@@ -1,18 +1,21 @@
 // One-shot sound effects, all synthesized from blips, filtered noise bursts
 // and bubbles (synth.ts). Routing matters:
 //  - `world`: footsteps and Anek's bird; muffled underwater and ducked in menus.
+//    Other people's splashes go through `far`, the world bus plus a reverb
+//    send, so they sit back in the scene.
 //  - `direct`: splash, dive and the surfacing gasp; bypass the underwater
 //    low-pass so they stay crisp at the moment the head crosses the surface.
 //  - `ui`: clicks, the arrival chime and the cutscene whoosh; never ducked.
 
-import { blip, bubble, gn, knock, noiseBurst, type Kit } from './synth';
+import { AMBIENT_RESERVE, blip, bubble, gn, knock, noiseBurst, type Kit } from './synth';
 import { syllable } from './voice';
-import { clamp01, mtof, pick, rand } from './util';
+import { clamp, clamp01, mtof, pick, rand } from './util';
 
 export type Surface = 'grass' | 'stone' | 'wood' | 'water';
 
 export class Sfx {
   private readonly chimeBus: GainNode;
+  private readonly far: GainNode;
 
   constructor(
     private readonly k: Kit,
@@ -28,6 +31,11 @@ export class Sfx {
     const send = gn(k.ctx, 0.35);
     this.chimeBus.connect(send);
     send.connect(reverb);
+    this.far = gn(k.ctx, 1);
+    this.far.connect(world);
+    const farSend = gn(k.ctx, 0.6);
+    this.far.connect(farSend);
+    farSend.connect(reverb);
   }
 
   private get now(): number {
@@ -39,9 +47,10 @@ export class Sfx {
     const t = this.now;
     const i = clamp01(intensity);
     const s = 0.35 + 0.65 * i;
-    // impact: bright noise dropping in pitch, plus the plunge thump
-    noiseBurst(k, this.direct, { t, filter: 'bandpass', f0: 1800, f1: 500, glide: 0.25, q: 0.7, peak: 0.35 * s, attack: 0.004, decay: 0.2 + 0.5 * i });
-    blip(k, this.direct, { t, f0: 120, f1: 45, glide: 0.2, peak: 0.08 + 0.3 * i, attack: 0.004, decay: 0.3 });
+    // impact: bright noise dropping in pitch, plus a soft plunge (kept light:
+    // a sharp low sweep here sounds like a kick drum, not water)
+    noiseBurst(k, this.direct, { t, filter: 'bandpass', f0: 1800, f1: 500, glide: 0.25, q: 0.7, peak: 0.35 * s, attack: 0.008, decay: 0.2 + 0.5 * i });
+    blip(k, this.direct, { t, f0: 200, f1: 90, glide: 0.2, peak: 0.02 + 0.06 * i, attack: 0.015, decay: 0.25 });
     // spray hiss
     noiseBurst(k, this.direct, { t: t + 0.02, filter: 'highpass', f0: 3000, q: 0.5, peak: 0.12 * s, attack: 0.02, decay: 0.3 + 0.6 * i, pan: rand(-0.3, 0.3) });
     // bubbles around you, then droplets falling back
@@ -49,6 +58,23 @@ export class Sfx {
       bubble(k, this.direct, t + rand(0.05, 0.6), rand(300, 1200), rand(0.02, 0.06) * s, rand(-0.7, 0.7));
     for (let n = 0, c = 2 + Math.round(6 * i); n < c; n++)
       bubble(k, this.direct, t + rand(0.2, 1.1), rand(1200, 3000), rand(0.01, 0.03) * s, rand(-0.8, 0.8));
+  }
+
+  /**
+   * Someone else's splash (a kid diving off a pier) heard from where you
+   * stand: a soft wash of spray and a few droplets, with no low thump.
+   * level 0..1 is already scaled for distance; pan -1 (left) .. 1 (right).
+   */
+  splashAway(level: number, pan: number): void {
+    const k = this.k;
+    const g = clamp01(level);
+    if (g < 0.02) return;
+    const t = this.now;
+    const p = clamp(pan, -1, 1) * 0.8;
+    noiseBurst(k, this.far, { t, filter: 'bandpass', f0: 1600, f1: 700, glide: 0.3, q: 0.8, peak: 0.36 * g, attack: 0.025, decay: 0.5, pan: p, reserve: AMBIENT_RESERVE });
+    noiseBurst(k, this.far, { t: t + 0.04, filter: 'highpass', f0: 2800, q: 0.5, peak: 0.12 * g, attack: 0.05, decay: 0.7, pan: p, reserve: AMBIENT_RESERVE });
+    for (let n = 0, c = 3 + Math.round(4 * g); n < c; n++)
+      bubble(k, this.far, t + rand(0.15, 0.9), rand(900, 2600), rand(0.02, 0.05) * g, clamp(p + rand(-0.25, 0.25), -1, 1), AMBIENT_RESERVE);
   }
 
   step(surface: Surface, quad: boolean): void {
