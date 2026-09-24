@@ -1,10 +1,12 @@
 // Terrain surface material: Lambert lighting (patched for the cylinder), with
 // world-anchored procedural detail — grass tones, rock strata, crop fields
-// with furrows and hedgerows, snow, and underwater caustics.
+// with furrows and hedgerows, snow, and under water the colour absorption
+// and caustics of the river optics (water/waterTextures.ts).
 
 import { MeshLambertMaterial } from 'three';
 import { makeBentDepthMaterial, patchWorldMaterial } from '../../render/bend';
 import { U } from '../../render/uniforms';
+import { waterOpticsGlsl, waterTextures } from '../water/waterTextures';
 
 export const terrainNoiseGlsl = /* glsl */ `
 #ifndef HR_TNOISE
@@ -50,10 +52,12 @@ vTUnder = aUnder;
 const fragmentPars = /* glsl */ `
 uniform vec2 uOriginMod;
 uniform vec2 uOriginModBig;
+uniform sampler2D uCaustics;
 varying vec4 vTColor;
 varying vec4 vTMat;
 varying float vTUnder;
 ${terrainNoiseGlsl}
+${waterOpticsGlsl}
 
 vec3 cropColor(float h) {
   if (h < 0.18) return vec3(0.62, 0.50, 0.20);      // ripe wheat
@@ -121,12 +125,6 @@ vec3 fields(vec2 wb, vec2 dwx, vec2 dwy, float dist, vec3 base) {
   return crop;
 }
 
-float caustics(vec2 p, float t) {
-  vec2 q = p * 0.55;
-  float a = tNoise(q + vec2(t * 0.35, t * 0.21));
-  float b = tNoise(q * 1.37 - vec2(t * 0.27, -t * 0.19) + 5.1);
-  return pow(max(1.0 - abs(a - b), 0.0), 9.0);
-}
 `;
 
 const fragmentColor = /* glsl */ `
@@ -164,11 +162,28 @@ const fragmentColor = /* glsl */ `
   // snow
   float snow = vTColor.a;
   if (snow > 0.0) col = mix(col, vec3(0.88, 0.9, 0.95) * (0.92 + 0.1 * n1), snow);
-  // under water: darker, greener, with dancing caustics near the surface
+  // under water (Clearwater's optics): sunlight on its way down to the bed and
+  // back up loses red first, and the waves above focus it into caustics
+  vec2 cu1 = w / W_TILE + uTime * vec2(0.021, 0.013);
+  vec2 cu2 = (W_ROT1 * w) / (W_TILE * 0.8) - uTime * vec2(0.017, 0.026);
   if (vTUnder > 0.02) {
     float dep = vTUnder;
-    col *= mix(vec3(1.0), vec3(0.42, 0.55, 0.5), smoothstep(0.0, 4.0, dep));
-    col += vec3(0.5, 0.6, 0.45) * caustics(w, uTime) * (1.0 - smoothstep(0.5, 6.0, dep)) * fine * 0.5;
+    float thB = atan(wpos.x, uR - wpos.y);
+    float cB = cos(thB);
+    float sB = sin(thB);
+    float sunUpB = max(sB * uSunDir.x + cB * uSunDir.y, 0.0);
+    float legs = 1.0 / max(wCosInside(sunUpB), 0.25);
+    if (uUnderwater < 0.5) {
+      float cosV = clamp(dot(normalize(cameraPosition - wpos), vec3(-sB, cB, 0.0)), 0.0, 1.0);
+      legs += 1.0 / max(wCosInside(cosV), 0.25);
+    }
+    col *= exp(-W_SIG_T * dep * legs);
+    // explicit gradients: this branch differs between neighbouring pixels
+    vec3 k1 = textureGrad(uCaustics, cu1, wbx / W_TILE, wby / W_TILE).rgb;
+    vec3 k2 = textureGrad(uCaustics, cu2, (W_ROT1 * wbx) / (W_TILE * 0.8), (W_ROT1 * wby) / (W_TILE * 0.8)).rgb;
+    vec3 caus = min(k1, k2) * (255.0 / 64.0) * 1.3;
+    float k = smoothstep(0.02, 0.3, sunUpB) * 0.8 * (1.0 - smoothstep(1.5, 7.0, dep)) * (1.0 - smoothstep(25.0, 120.0, dist));
+    col *= mix(vec3(1.0), caus, k);
   }
   diffuseColor.rgb *= col;
 }
@@ -182,6 +197,7 @@ export function createTerrainMaterial(): MeshLambertMaterial {
     uniforms: {
       uOriginMod: U.uOriginMod,
       uOriginModBig: U.uOriginModBig,
+      uCaustics: { value: waterTextures().caustics },
     },
     vertexPars,
     vertexBegin,

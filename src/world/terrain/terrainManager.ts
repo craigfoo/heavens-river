@@ -48,6 +48,7 @@ class TNode {
   ready = false;
   mesh: Mesh | null = null;
   water: Mesh | null = null;
+  waterSkirt: Mesh | null = null;
   trees: InstancedMesh | null = null;
   hMin = 0;
   hMax = 3000;
@@ -76,6 +77,7 @@ export class TerrainManager {
   private material: MeshLambertMaterial;
   private depthMaterial: Material;
   private waterMaterial: Material;
+  private waterSkirtMaterial: Material;
   private index: BufferAttribute;
   private frameNo = 0;
   private visibleSet: TNode[] = [];
@@ -100,6 +102,7 @@ export class TerrainManager {
     this.material = createTerrainMaterial();
     this.depthMaterial = makeBentDepthMaterial('terrain');
     this.waterMaterial = createWaterMaterial();
+    this.waterSkirtMaterial = createWaterMaterial(true);
     this.index = buildGridIndex(CHUNK_N);
     this.farMaterial = createFarShellMaterial();
     this.trees = new TreeRenderer();
@@ -260,6 +263,7 @@ export class TerrainManager {
   private setVisible(n: TNode, v: boolean) {
     if (n.mesh) n.mesh.visible = v;
     if (n.water) n.water.visible = v;
+    if (n.waterSkirt) n.waterSkirt.visible = v;
     if (n.trees) n.trees.visible = v;
   }
 
@@ -273,7 +277,7 @@ export class TerrainManager {
   }
 
   private disposeNode(n: TNode) {
-    for (const m of [n.mesh, n.water]) {
+    for (const m of [n.mesh, n.water, n.waterSkirt]) {
       if (!m) continue;
       this.group.remove(m);
       frame.unregister(m);
@@ -285,6 +289,7 @@ export class TerrainManager {
     }
     n.mesh = null;
     n.water = null;
+    n.waterSkirt = null;
     n.ready = false;
   }
 
@@ -324,6 +329,23 @@ export class TerrainManager {
       frame.register(wm, r.anchorS, r.anchorZ);
       this.group.add(wm);
       n.water = wm;
+      const k = r.water.skirt;
+      if (k) {
+        const kg = new BufferGeometry();
+        kg.setAttribute('position', new BufferAttribute(k.position, 3));
+        kg.setAttribute('aFlow', new BufferAttribute(k.flow, 2));
+        kg.setAttribute('aDepth', new BufferAttribute(k.depth, 1));
+        kg.setAttribute('aKind', new BufferAttribute(k.kind, 1));
+        kg.setIndex(new BufferAttribute(k.index, 1));
+        kg.boundingSphere = g.boundingSphere.clone();
+        const km = new Mesh(kg, this.waterSkirtMaterial);
+        km.visible = false;
+        km.renderOrder = 11; // after every water surface (see chunkBuilder)
+        km.name = `water skirt ${r.key}`;
+        frame.register(km, r.anchorS, r.anchorZ);
+        this.group.add(km);
+        n.waterSkirt = km;
+      }
     }
     if (r.trees && r.trees.length > 0) {
       n.trees = this.trees.add(r.trees, r.anchorS, r.anchorZ, r.level);

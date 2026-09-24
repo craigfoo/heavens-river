@@ -11,6 +11,8 @@ let gen: WorldGen | null = null;
 function transferablesOf(r: ChunkResult): Transferable[] {
   const t: Transferable[] = [r.position.buffer, r.normal.buffer, r.color.buffer, r.mat.buffer, r.under.buffer];
   if (r.water) t.push(r.water.position.buffer, r.water.flow.buffer, r.water.depth.buffer, r.water.kind.buffer, r.water.index.buffer);
+  const k = r.water?.skirt;
+  if (k) t.push(k.position.buffer, k.flow.buffer, k.depth.buffer, k.kind.buffer, k.index.buffer);
   if (r.trees) t.push(r.trees.buffer);
   return t;
 }

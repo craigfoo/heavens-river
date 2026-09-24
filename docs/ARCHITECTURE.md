@@ -35,7 +35,13 @@ main.ts ─ App (renderer, world streaming, frame loop)
 - `world/terrain/` is a quadtree over the unrolled section (16 × 27 root tiles, 64 × 64 quads per chunk, down to ~1.1 m spacing), built by `terrainWorker.ts` through a priority queue in `workerPool.ts` (one-off jobs such as the far shell and the map image go ahead of chunks). Chunks carry skirts, colours, material weights, a water grid and tree instances. A low-resolution far shell covers the rest of the cylinder; its shader draws the main rivers from a small data texture of their centrelines, so they show as silver threads on the far side in Bob mode.
 - Farmland is painted in the terrain shader per farm region (jittered Voronoi cells with their own field orientation and size, strip fields and hedgerows), and a towpath runs along both banks of every main river.
 - `worldQuery.ts` answers gameplay questions on the main thread (ground height matching the rendered triangles, water level and flow), plus colliders and walkable floors from towns.
-- Water is a separate mesh per chunk with a flow-map shader (`world/water/waterMaterial.ts`): Fresnel reflection of the hologram, depth-based colour, shore foam, sun glints, and Snell's window from below. Under the surface, `world/underwater.ts` adds drifting motes and schools of silver fish.
+- Water is a separate mesh per chunk (`world/water/waterMaterial.ts`). The look follows [Clearwater](https://github.com/Aureliengmz/clearwater) by Aurélien / Lumaris (MIT):
+  - **Ripples:** a wave slope texture built once from an ocean spectrum (`world/water/waterTextures.ts`) is sampled in four layers and carried by each channel's current with a two-phase flow map. Drifting calm and choppy patches keep the tiles from showing.
+  - **Glossy distance:** the texture's mipmaps store the mean squared slope, so the slope variance lost with distance widens the sun glint (LEAN mapping) instead of sparkling.
+  - **Light:** exact Fresnel, a Beckmann sun glint, and Clearwater's absorption and scattering coefficients. The riverbed (terrain shader) absorbs its own light on the way down and back up, and gets caustics traced through the same waves. The surface adds the light the water column scatters, blended with alpha equal to the Fresnel term.
+  - **Edges:** a thin foam line at the bank, and Snell's window from below.
+  - **Seams:** tiles hang short "skirts" from their water edges, drawn after every surface. Where a surface is in front the depth test hides them, so they only fill seams between tiles of different detail.
+- Under the surface, `world/underwater.ts` adds drifting motes and schools of silver fish.
 
 ## Towns and life
 

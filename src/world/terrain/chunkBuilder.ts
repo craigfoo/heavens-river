@@ -263,6 +263,7 @@ export function buildChunk(gen: WorldGen, req: ChunkRequest): ChunkResult {
     const wflow = new Float32Array(V * 2);
     const wdepth = new Float32Array(V);
     const wkind = new Uint8Array(V);
+    const seam = 0.002 + Math.max(req.sizeS, req.sizeZ) * 2e-6;
     for (let j = 0; j <= N; j++) {
       for (let i = 0; i <= N; i++) {
         const v = j * (N + 1) + i;
@@ -284,9 +285,11 @@ export function buildChunk(gen: WorldGen, req: ChunkRequest): ChunkResult {
           }
           lvl = best > -1e8 ? Math.min(best, H[k] + 0.5) : H[k] - 6;
         }
-        wpos[v * 3] = position[v * 3];
+        // overlap neighbouring water tiles by a hair (far below a pixel): float
+        // rounding in the bend otherwise leaves pin-prick gaps along the seams
+        wpos[v * 3] = position[v * 3] + (i === 0 ? -seam : i === N ? seam : 0);
         wpos[v * 3 + 1] = lvl;
-        wpos[v * 3 + 2] = position[v * 3 + 2];
+        wpos[v * 3 + 2] = position[v * 3 + 2] + (j === 0 ? -seam : j === N ? seam : 0);
         wflow[v * 2] = FS[k];
         wflow[v * 2 + 1] = FZ[k];
         wdepth[v] = lvl - H[k];
@@ -309,7 +312,48 @@ export function buildChunk(gen: WorldGen, req: ChunkRequest): ChunkResult {
       idx[p++] = d;
       idx[p++] = b;
     }
-    water = { position: wpos, flow: wflow, depth: wdepth, kind: wkind, index: idx };
+    // skirts: short curtains down from the tile's outer water edges. They are
+    // drawn after every water surface, so the depth test hides them wherever a
+    // surface is in front; they only show through seams between tiles of
+    // different detail, where the bed would otherwise peek through
+    const drop = 0.3 + (Math.max(req.sizeS, req.sizeZ) / N) * 0.002;
+    const sp: number[] = [];
+    const sf: number[] = [];
+    const sd: number[] = [];
+    const sk: number[] = [];
+    const si: number[] = [];
+    const curtain = (v0: number, v1: number) => {
+      const b = sp.length / 3;
+      for (const v of [v0, v1]) {
+        for (const dy of [0, -drop]) {
+          sp.push(wpos[v * 3], wpos[v * 3 + 1] + dy, wpos[v * 3 + 2]);
+          sf.push(wflow[v * 2], wflow[v * 2 + 1]);
+          sd.push(wdepth[v]);
+          sk.push(wkind[v]);
+        }
+      }
+      si.push(b, b + 1, b + 3, b, b + 3, b + 2);
+    };
+    for (const q of wetQuads) {
+      const i = q % N;
+      const j = (q / N) | 0;
+      const a = j * (N + 1) + i;
+      if (i === 0) curtain(a, a + (N + 1));
+      if (i === N - 1) curtain(a + 1, a + 1 + (N + 1));
+      if (j === 0) curtain(a, a + 1);
+      if (j === N - 1) curtain(a + (N + 1), a + (N + 1) + 1);
+    }
+    const skirt =
+      si.length > 0
+        ? {
+            position: new Float32Array(sp),
+            flow: new Float32Array(sf),
+            depth: new Float32Array(sd),
+            kind: new Uint8Array(sk),
+            index: sp.length / 3 > 65535 ? new Uint32Array(si) : new Uint16Array(si),
+          }
+        : null;
+    water = { position: wpos, flow: wflow, depth: wdepth, kind: wkind, index: idx, skirt };
   }
 
   // ---- bounding sphere of the bent chunk

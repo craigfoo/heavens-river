@@ -39,6 +39,8 @@ export interface WaterData {
   depth: Float32Array; // W - ground
   kind: Uint8Array; // river class
   index: Uint16Array | Uint32Array;
+  /** Curtains hanging from the tile's outer water edges (same attributes), or null. */
+  skirt: Omit<WaterData, 'skirt'> | null;
 }
 
 export interface InitMessage {
