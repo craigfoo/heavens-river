@@ -4,7 +4,7 @@ A browser-based, real-time three.js world where the player explores the Heaven's
 
 ## Running the explorer
 
-This repository contains the spec below **and** its implementation (TypeScript, three.js, Vite; no backend, no downloaded assets: every model, texture and sound is generated in code).
+This repository contains the spec below **and** its implementation (TypeScript, three.js, Vite; no backend). Apart from the Quinlan model (see Credits), every model, texture and sound is generated in code.
 
 ```bash
 npm install
@@ -36,6 +36,12 @@ A first visit plays the one-minute arrival sequence (skippable with Enter, Space
 Gamepad: left stick move, right stick look, A jump, B dive, LB/RB hold to steer each eye, click the left stick or hold LT to run, X interact, Y vision, Back map, Start menu, D-pad up Bob mode, D-pad down photo mode. On phones and tablets, drag on the left half to move and on the right half to look, and use the on-screen buttons.
 
 How the code is organised, and the decisions taken on the spec's open questions, are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). This is a non-commercial fan project set in Dennis E. Taylor's *Bobiverse*; it is not affiliated with the author or his publishers.
+
+### Credits
+
+- The Quinlan 3D model was made with [Meshy](https://www.meshy.ai) from the project's concept art and is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). It has been changed for the game: rigged for animation, simplified into levels of detail, and tinted per character.
+- Water shading follows [Clearwater](https://github.com/Aureliengmz/clearwater) by Aurélien / Lumaris (MIT).
+- Ambient occlusion: [N8AO](https://github.com/N8python/n8ao) by N8python (ISC).
 
 ---
 

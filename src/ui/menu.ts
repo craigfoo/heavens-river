@@ -154,7 +154,7 @@ export class Menu {
         <p><b>Heaven's River Explorer</b> is a non-commercial fan project set in <i>Heaven's River</i> (Bobiverse, Book 4) by <b>Dennis E. Taylor</b>. Please read the books.</p>
         <p>There is no official concept art for the Quinlans or the megastructure; everything here is derived from the text and the author's notes: a topopolis looping Eta Leporis three times, 56-mile radius, 560-mile sections, four alternating rivers per section, a light tube down the axis hidden by a diffuse hologram sky, and barrier mountains at each section end.</p>
         <p>Scale is honest: you are walking the inside of a 90 km radius cylinder spinning at ~805 m/s (0.73 g). Look along the spin and the land curves up into the haze.</p>
-        <p class="dim">Built with three.js. All geometry, textures and sounds are procedural.</p>
+        <p class="dim">Built with three.js. The Quinlan model was made with <a href="https://www.meshy.ai" target="_blank" rel="noopener">Meshy</a> from the project's concept art and is licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>; it has been rigged, simplified and tinted for the game. Everything else (geometry, textures, sound) is procedural. Water shading after Clearwater by Aurélien / Lumaris (MIT); ambient occlusion by N8AO (ISC).</p>
         <p><button class="btn" data-x="intro">Replay the arrival</button> <button class="btn" data-x="reset">Reset saved game</button></p>
       </div>`;
       (this.body.querySelector('[data-x="intro"]') as HTMLButtonElement).onclick = () => this.actions.replayIntro();
