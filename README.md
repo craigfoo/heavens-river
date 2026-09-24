@@ -13,6 +13,8 @@ npm run build      # type-check, then a static site in dist/ (deployable anywher
 npm run preview    # serve the production build
 ```
 
+**GitHub Pages:** `.github/workflows/pages.yml` builds the site and publishes it on every push to `main`, at https://craigfoo.github.io/heavens-river/. Before the first deploy, set *Settings → Pages → Build and deployment → Source* to **GitHub Actions**.
+
 A first visit plays the one-minute arrival sequence (skippable with Enter, Space, Escape or a tap) and hands over at a hillside maintenance hatch above the first river city at golden hour. Progress autosaves to `localStorage`; *Reset saved game* in the menu starts over. Add `?nointro` to the URL to untick the intro by default.
 
 | Keyboard / mouse | Action |
