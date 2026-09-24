@@ -15,7 +15,8 @@ export type Surface = 'grass' | 'stone' | 'wood' | 'water';
 
 export class Sfx {
   private readonly chimeBus: GainNode;
-  private readonly far: GainNode;
+  /** Bus for other people's splashes (its gain is the water volume). */
+  readonly far: GainNode;
 
   constructor(
     private readonly k: Kit,

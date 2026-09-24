@@ -591,6 +591,9 @@ export class Game {
       case 'muted':
         this.audio.setVolume(s.volume, s.muted);
         break;
+      case 'waterVolume':
+        this.audio.setWaterVolume(s.waterVolume);
+        break;
       case 'visionMode':
         if (this.visionOn !== 'off') this.setVision(s.visionMode);
         break;

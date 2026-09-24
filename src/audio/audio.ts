@@ -79,6 +79,8 @@ interface Graph {
   sfx: Sfx;
   spin: SpinTransfer;
   lift: Elevator;
+  /** Output gains of everything the water volume scales. */
+  water: SmoothParam[];
   taps: Record<string, AudioNode>;
   analysers: Map<string, AnalyserNode>;
 }
@@ -98,6 +100,7 @@ function softClipCurve(): Float32Array<ArrayBuffer> {
 export class AudioEngine {
   private g: Graph | null = null;
   private volume = 0.8;
+  private waterVolume = 1;
   private muted = false;
   private disposed = false;
   private ctlAcc = 0;
@@ -141,6 +144,7 @@ export class AudioEngine {
         this.lastNow = ctx.currentTime;
         this.unlock(ctx);
         this.applyVolume();
+        this.applyWaterVolume();
         this.timer = setInterval(() => this.tick(), 250);
         // idle work off the frame path: render barge creaks one at a time
         const idle = () => this.fx((g) => g.barge.prepare() && setTimeout(idle, 120));
@@ -158,6 +162,12 @@ export class AudioEngine {
   setMasterVolume(v: number): void {
     this.volume = clamp01(fin(v, this.volume));
     this.applyVolume();
+  }
+
+  /** Water sounds (rivers, streams, underwater, others' splashes) relative to the master, 0..1. */
+  setWaterVolume(v: number): void {
+    this.waterVolume = clamp01(fin(v, this.waterVolume));
+    this.applyWaterVolume();
   }
 
   setMuted(m: boolean): void {
@@ -370,6 +380,7 @@ export class AudioEngine {
       sfx,
       spin,
       lift,
+      water: [river.out, under.out, sfx.far].map((n) => new SmoothParam(n.gain, 0.1)),
       taps: {
         master: clip,
         river: river.out,
@@ -413,6 +424,18 @@ export class AudioEngine {
     try {
       // squared: a perceptually even slider
       g.level.set(this.muted ? 0 : this.volume * this.volume * HEADROOM, g.ctx.currentTime);
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  private applyWaterVolume(): void {
+    const g = this.g;
+    if (!g) return;
+    try {
+      // squared, like the master: a perceptually even slider
+      const v = this.waterVolume * this.waterVolume;
+      for (const p of g.water) p.set(v, g.ctx.currentTime);
     } catch (e) {
       this.fail(e);
     }

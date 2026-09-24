@@ -69,6 +69,11 @@ export class AudioBridge {
     if (!this.engine.started) void this.engine.start();
   }
 
+  /** Water sounds relative to the master volume (0..1). */
+  setWaterVolume(v: number) {
+    this.engine.setWaterVolume(v);
+  }
+
   setVolume(v: number, muted: boolean) {
     this.engine.setMasterVolume(v);
     this.engine.setMuted(muted);

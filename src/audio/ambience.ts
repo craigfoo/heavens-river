@@ -1,9 +1,10 @@
 // Continuous ambient beds built on the shared noise loops.
 //  River: an airy rush (louder and brighter with current speed), soft lapping
 //    wavelets (a noise band swelled by scheduled events) and droplet plips
-//    that become a babble on fast streams. Calm water is kept out of the low
-//    end, where noise reads as traffic rather than water; only fast, heavy
-//    water adds a low body roar.
+//    that become a babble on fast streams. Slow water (the big rivers,
+//    canals) is nearly silent: a faint bed, gentle lapping seconds apart and
+//    the odd drop. Everything stays out of the low end, where noise reads as
+//    traffic rather than water; only fast, heavy water adds a low body roar.
 //  Wind: band-passed noise whose level and centre follow a random gust
 //    process, tonal whistling over ridges when exposure is high, and low
 //    buffeting in strong gusts.
@@ -26,8 +27,8 @@ const LVL = {
   wind: 0.6,
   whistle: 0.5,
   buffet: 0.6,
-  rumble: 0.35,
-  hush: 0.12,
+  rumble: 0.2,
+  hush: 0.08,
   bubble: 0.06,
 };
 
@@ -47,6 +48,7 @@ export class RiverLayer {
   private wanderTarget = 0.5;
   private prox = 0;
   private bright = 0;
+  private calm = 1;
 
   constructor(
     private readonly k: Kit,
@@ -90,17 +92,22 @@ export class RiverLayer {
   update(now: number, dt: number, ctl: boolean, prox: number, speed: number): void {
     this.prox = prox;
     this.bright = smoothstep(0.6, 3.5, speed);
+    // slow water (the big rivers, canals) is nearly silent: no hiss to speak
+    // of, just unhurried lapping at the bank and the odd drop
+    this.calm = 1 - smoothstep(1.4, 2.8, speed);
     // slow random "breathing" of the current
     this.wander += (this.wanderTarget - this.wander) * Math.min(1, dt * 0.4);
     if (Math.abs(this.wander - this.wanderTarget) < 0.02) this.wanderTarget = Math.random();
     if (ctl) {
       const rush = smoothstep(0.05, 2.5, speed);
-      // a soft background: it falls away quickly as you walk off from the water
-      this.rush.set(prox * prox * (0.2 + 0.8 * rush) * (0.85 + 0.3 * this.wander) * LVL.rush, now);
+      // a soft background: it falls away quickly as you walk off from the water,
+      // and only a current you could see is heard as a hiss
+      const flow = smoothstep(1.4, 3.5, speed);
+      this.rush.set(prox * prox * (0.06 + 0.94 * flow) * (0.85 + 0.3 * this.wander) * LVL.rush, now);
       this.rushTone.set(expLerp(1400, 6000, this.bright * 0.8 + this.wander * 0.2), now);
       // the roar only where the water is really moving (rapids, fast streams)
       this.body.set(prox * prox * smoothstep(1.8, 4.5, speed) * LVL.body, now);
-      this.lapLevel.set(Math.pow(prox, 2.5) * (1 - 0.5 * rush) * LVL.lap, now);
+      this.lapLevel.set(Math.pow(prox, 2.5) * (1 - 0.5 * rush) * (1 - 0.3 * this.calm) * LVL.lap, now);
     }
     this.schedule(now);
   }
@@ -113,20 +120,21 @@ export class RiverLayer {
       return;
     }
     if (this.nextLap < now) this.nextLap = now;
-    // wavelets: slow, soft swells with an unhurried rhythm
+    // wavelets: soft swells; on slow water they are gentler, lower and seconds apart
+    const k = this.calm;
     while (this.nextLap < horizon) {
       const t = this.nextLap;
-      const rise = rand(0.15, 0.35);
-      this.lapBand.frequency.setTargetAtTime(rand(500, 1100), t, 0.12);
-      this.lapGain.gain.setTargetAtTime(rand(0.35, 1), t, rise / 3);
-      this.lapGain.gain.setTargetAtTime(0.06, t + rise, rand(0.2, 0.45));
-      this.nextLap += rise + rand(0.35, 1.1);
+      const rise = rand(0.15, 0.35) + k * rand(0.1, 0.35);
+      this.lapBand.frequency.setTargetAtTime(rand(500, 1100) * (1 - 0.3 * k), t, 0.15);
+      this.lapGain.gain.setTargetAtTime(rand(0.35, 1) * (1 - 0.35 * k), t, rise / 3);
+      this.lapGain.gain.setTargetAtTime(0.04, t + rise, rand(0.2, 0.45) + 0.4 * k);
+      this.nextLap += rise + rand(0.35, 1.1) + k * rand(0.6, 2.2);
     }
-    // droplets: sparse beside a big river, a busy babble on fast streams
-    const rate = this.prox * this.prox * (0.25 + 5 * this.bright);
+    // droplets: the odd drop beside slow water, a busy babble on fast streams
+    const rate = this.prox * this.prox * (0.2 + 5 * this.bright * (1 - 0.8 * k));
     for (let t = 0; (t = this.plips.due(now, horizon, rate)) >= 0; ) {
-      const f = rand(600, 2600) * (0.8 + 0.4 * this.bright);
-      bubble(this.k, this.out, t, f, rand(0.3, 1) * LVL.plip * this.prox, rand(-0.8, 0.8), AMBIENT_RESERVE);
+      const f = rand(600, 2600) * (0.8 + 0.4 * this.bright) * (1 - 0.25 * k);
+      bubble(this.k, this.out, t, f, rand(0.3, 1) * LVL.plip * this.prox * (1 - 0.4 * k), rand(-0.8, 0.8), AMBIENT_RESERVE);
     }
   }
 }

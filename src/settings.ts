@@ -16,6 +16,7 @@ export interface Settings {
   anekCutscenes: boolean; // surveillance-bird cutscene flavour
   tripSeconds: number; // barge trip length (60..180)
   volume: number;
+  waterVolume: number; // rivers, streams, underwater and other people's splashes, relative to volume
   muted: boolean;
   visionMode: 'panorama' | 'split';
   showDebug: boolean;
@@ -39,6 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   anekCutscenes: false,
   tripSeconds: 120,
   volume: 0.7,
+  waterVolume: 1,
   muted: false,
   visionMode: 'panorama',
   showDebug: false,
