@@ -13,7 +13,8 @@ const STONE = ['#a08e76', '#ab9a7c', '#8f8170', '#b3a384', '#9c8b7e'].map(lin);
 const PLASTER = ['#ecdcbc', '#e4bc7c', '#dc9e7c', '#bccccc', '#cccc9c', '#f2e4cc', '#dcac64', '#e8c8a8'].map(lin);
 const TIMBER = ['#4c3626', '#5c402a', '#40301e'].map(lin);
 const THATCH = ['#b89858', '#a88848', '#c4a868'].map(lin);
-const TILE = ['#b85a3a', '#a84a32', '#c46c44', '#b0503a'].map(lin);
+// clay tiles: fresh terracotta to old, browned and faded
+const TILE = ['#b0583a', '#9c4e36', '#b86e4c', '#8e5842', '#a2644a', '#824c3a'].map(lin);
 const SHINGLE = ['#6c5c4a', '#7c6652', '#5e5040'].map(lin);
 const SLATE = ['#4c525c', '#5a626c'].map(lin);
 const PAINT = ['#2a5a8c', '#2c6c4c', '#aa3c2c', '#dcaa34', '#3c8c8c', '#7c3c7c', '#cc6a2c'].map(lin);

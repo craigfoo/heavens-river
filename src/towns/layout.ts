@@ -488,6 +488,7 @@ interface FillOpts {
 }
 
 function fillBlock(B: BankLayout, block: Rect, district: District, rng: Rng, o: FillOpts) {
+  const firstBuilding = B.buildings.length;
   const depth = block.c1 - block.c0;
   const rows = depth > 26 ? 2 : 1;
   for (let r = 0; r < rows; r++) {
@@ -587,6 +588,20 @@ function fillBlock(B: BankLayout, block: Rect, district: District, rng: Rng, o: 
       a += w + (rng.chance(0.25) ? rng.range(1.5, 4) : 0.3);
     }
   }
+  // trees in the yards and gaps between houses (fruit trees in some), from
+  // their own random stream so the buildings of later blocks stay the same
+  if (district === 'residential' || district === 'edge' || district === 'craft') {
+    const trng = new Rng(seedFor(Math.round(block.a0 * 16) ^ (Math.round(block.c0 * 16) << 12), `yard${B.side}`));
+    const tries = Math.round(((block.a1 - block.a0) * depth) / 260);
+    const mine = B.buildings.slice(firstBuilding);
+    for (let k = 0; k < tries; k++) {
+      const a = trng.range(block.a0 + 2.5, block.a1 - 2.5);
+      const c = trng.range(block.c0 + 2.5, block.c1 - 2.5);
+      const clear = mine.every((b) => Math.abs(a - b.a) > b.w / 2 + 2.6 || Math.abs(c - b.c) > b.d / 2 + 2.6);
+      if (!clear || B.trees.some((t) => Math.hypot(t.a - a, t.c - c) < 5)) continue;
+      B.trees.push({ a, c, scale: trng.range(0.5, 0.95), type: trng.chance(0.35) ? 3 : 0 });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +643,15 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
       tower: false,
     });
     if (!burrow && rng.chance(0.5)) B.gardens.push({ a0: a - w / 2, a1: a + w / 2, c0: c + d / 2 + 1, c1: c + d / 2 + 7 });
+  }
+  // trees among the dwellings (own random stream: the rest of the hamlet stays the same)
+  const trng = new Rng(seedFor(site.seed, `hamletTrees${side}`));
+  for (let k = 0; k < n * 2; k++) {
+    const a = trng.range(-L + 4, L - 4);
+    const c = trng.range(11, D - 4);
+    const r: Rect = { a0: a - 1.5, a1: a + 1.5, c0: c - 1.5, c1: c + 1.5 };
+    if (placed.some((p) => overlaps(p, r)) || B.trees.some((t) => Math.hypot(t.a - a, t.c - c) < 6)) continue;
+    B.trees.push({ a, c, scale: trng.range(0.6, 1.05), type: trng.chance(0.3) ? 3 : 0 });
   }
   // boathouse on the water
   const ba = rng.range(-L * 0.6, L * 0.6);

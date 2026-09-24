@@ -2,6 +2,7 @@
 
 import { R } from '../../config';
 import { clamp, lerp, smoothstep } from '../../core/math';
+import { value2 } from '../../core/noise';
 import { hash2 } from '../../core/rng';
 import { newSample, type TerrainSample, WorldGen } from '../gen/world';
 import { TREE_STRIDE, type ChunkRequest, type ChunkResult, type WaterData } from './chunkTypes';
@@ -25,6 +26,7 @@ const C = {
   rockDark: hex('#5b534d'),
   snow: hex('#eef1f5'),
   town: hex('#8e7d62'),
+  townLawn: hex('#6e7a42'),
   path: hex('#9b8763'),
   scree: hex('#978a78'),
 };
@@ -127,7 +129,12 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
     farm *= 1 - tp;
   }
   if (o.town > 0) {
-    mix3(col, C.town, o.town * 0.85, col);
+    // yards: patches of lawn and trodden earth (colour only: grass blades would
+    // poke through the streets, which are thin meshes laid on the ground)
+    const n = 0.65 * value2(s / 11, z / 11, 0, 71) + 0.35 * value2(s / 3.7, z / 3.7, 0, 72);
+    const lawn = smoothstep(0.42, 0.62, n);
+    mix3(C.town, C.townLawn, lawn, _yard);
+    mix3(col, _yard, o.town * 0.85, col);
     grass *= 1 - o.town;
     farm *= 1 - o.town;
   }
@@ -139,6 +146,7 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
   return out;
 }
 
+const _yard: RGB = [0, 0, 0];
 const _bo: BiomeOut = { rgb: [0, 0, 0], grass: 0, rock: 0, sand: 0, farm: 0, snow: 0 };
 const _t2 = newSample();
 

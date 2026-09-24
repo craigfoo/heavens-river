@@ -88,6 +88,18 @@ vec3 muralPaint(vec2 uv, float seed, float fw) {
   return col;
 }
 
+// Weathering on roofs at the scale of metres, which (unlike the tiles and
+// straw) stays visible from a distance: lichen and soot patches, sun bleaching.
+vec3 roofWeather(vec3 col, vec2 uv) {
+  float wn = tNoise(uv * 0.21 + 17.0);
+  float wn2 = tNoise(uv * 0.07 + 3.0);
+  col *= 0.8 + 0.3 * wn;
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, vec3(lum) * vec3(1.03, 1.0, 0.93), 0.12 + 0.22 * wn2);
+  col = mix(col, col * vec3(0.72, 0.8, 0.58), smoothstep(0.62, 0.82, tNoise(uv * 0.33 + 5.0)) * 0.45);
+  return col;
+}
+
 vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
   vec2 fw2 = fwidth(uv);
   float fw = max(fw2.x, fw2.y);
@@ -141,6 +153,7 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     col = base * (0.7 + 0.35 * strands * detail + 0.15 * tNoise(uv * 1.5)) * (0.85 + 0.2 * smoothstep(0.0, 0.8, course));
     col = mix(col, col * vec3(0.7, 0.72, 0.6), smoothstep(0.55, 0.85, tNoise(uv * 0.6)) * 0.5);
     tRough = 1.0;
+    col = roofWeather(col, uv);
   } else if (t == 5) {
     // clay roof tiles: rows with curved tile tops
     float row = floor(uv.y / 0.26);
@@ -153,6 +166,7 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     col = mix(col, base * 0.45, (1.0 - smoothstep(0.0, 0.14 + fw * 3.0, fy)) * detail);
     col = mix(col, col * vec3(0.8, 0.85, 0.7), smoothstep(0.6, 0.9, tNoise(uv * 0.7)) * 0.6);
     tRough = 0.7;
+    col = roofWeather(col, uv);
   } else if (t == 6 || t == 7) {
     // wooden shingles / slate
     float rh = t == 6 ? 0.22 : 0.2;
@@ -165,6 +179,7 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     col = mix(col, base * 0.35, (1.0 - smoothstep(0.004, 0.012 + fw, gap)) * detail);
     col = mix(col, base * 0.5, (1.0 - smoothstep(0.0, 0.1 + fw * 3.0, fract(uv.y / rh))) * detail);
     tRough = t == 6 ? 0.85 : 0.55;
+    col = roofWeather(col, uv);
   } else if (t == 8) {
     // planks; carved patterns when param > 0.5
     float plank = floor(uv.x / 0.21);
