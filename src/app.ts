@@ -20,6 +20,7 @@ import { Hatch } from './world/hatch';
 import { Bulkheads } from './world/bulkhead';
 import { UnderwaterLife } from './world/underwater';
 import { TownLife } from './npc/townLife';
+import { loadQuinlanAsset } from './npc/quinlanAsset';
 import { PlayerAvatar } from './npc/avatar';
 import { SurveillanceBirds } from './npc/birds';
 import { newSample } from './world/gen/world';
@@ -106,6 +107,12 @@ export class App {
     this.life = new TownLife(this.towns, this.world);
     this.scene.add(this.life.group);
     this.scene.add(this.avatar.mesh);
+    // the textured Quinlan replaces the procedural one once it has loaded
+    void loadQuinlanAsset().then((asset) => {
+      if (!asset) return;
+      this.life.useAsset(asset);
+      this.avatar.useAsset(asset);
+    });
     this.birds = new SurveillanceBirds(this.towns);
     this.scene.add(this.birds.group);
     this.portals.build(this.gen);

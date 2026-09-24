@@ -4,7 +4,7 @@ This page is for people changing the code. The spec (what the world should be) i
 
 ## Big picture
 
-Everything is generated at run time from a world seed and a section index: terrain, rivers, towns, buildings, people, textures (procedural shaders) and sound (Web Audio synthesis). There are no asset files. The main thread renders and simulates; a pool of module workers builds terrain chunks, towns and the map image.
+Everything is generated at run time from a world seed and a section index: terrain, rivers, towns, buildings, textures (procedural shaders) and sound (Web Audio synthesis). The one asset is the Quinlan model (`public/models/`, see below). The main thread renders and simulates; a pool of module workers builds terrain chunks, towns and the map image.
 
 ```
 main.ts ─ App (renderer, world streaming, frame loop)
@@ -47,7 +47,10 @@ main.ts ─ App (renderer, world streaming, frame loop)
 
 - `world/gen/settlements.ts` places hamlets, towns and river cities along the rivers and defines each town's frame (a along the river, c inland), canals and harbour basins. Names come from a syllable table (`gen/names.ts`); section numbers are shown in an invented base-8 Quinlan numbering.
 - `towns/layout.ts` lays out quays, streets, plazas, markets, districts and buildings; `kit.ts` and `props.ts` build them (burrows, houses, towers, civic halls with domes, mills, boathouses, bridges, piers, barges, statues, fountains, murals); `townMaterial.ts` paints every surface procedurally (stone, half-timbering, tile, thatch, mosaics, murals, gold leaf). Towns are built in workers with near and far detail per tile, and come back with colliders, walkable floors, NPC waypoints, bird perches and mural positions.
-- `npc/quinlanModel.ts` is the procedural Quinlan (2,870 or 584 triangles) with vertex-shader animation for idle, walk, all-fours run, swim, sit-and-sing and the jaw-rub smile. `townLife.ts` fills towns with walkers, stall keepers, dock watchers, singing circles, chatting pairs, the odd quarrel, swimmers and pier-diving kids, drawn as two instanced meshes. `birds.ts` adds Anek's surveillance birds. `avatar.ts` is your own body: shadow only in first person, visible in photo mode.
+- **Quinlans.** `npc/quinlanModel.ts` animates Quinlans in the vertex shader: idle, walk, all-fours run, swim, sit-and-sing and the jaw-rub smile. Each vertex belongs to one body part (body, head, jaw, arms, legs, tail) with a weight that blends it towards the part's parent, so thousands can be drawn instanced.
+  - The model is a textured mesh made with Meshy from a concept (source in `art/quinlan/`). `tools/quinlan/build.mjs` (`npm run quinlan`) turns it into `public/models/quinlan.bin` and `quinlan-albedo.jpg`: it rigs it with bone-heat weights from hand-placed bones, finds the fur and the gear in the texture (for per-Quinlan fur tints and gear dyes) and builds three LODs. The near LOD samples the texture; the mid and far LODs carry its colours in their vertices, because the tightly packed atlas bleeds across its seams in the mipmaps. How the poses adapt to this body (it leans forward and carries its tail high) is stored in the same file. `npc/quinlanAsset.ts` loads it.
+  - Until it has loaded, or if it can't be, the original procedural model (2,870 or 584 triangles, built in `quinlanModel.ts`) stands in.
+  - `townLife.ts` fills towns with walkers, stall keepers, dock watchers, singing circles, chatting pairs, the odd quarrel, swimmers and pier-diving kids, drawn as one instanced mesh per LOD. `birds.ts` adds Anek's surveillance birds. `avatar.ts` is your own body: shadow only in first person, visible in photo mode.
 
 ## Gameplay
 
@@ -63,13 +66,13 @@ main.ts ─ App (renderer, world streaming, frame loop)
 - **Rivers at the barriers:** each main river runs through a gorge into a stone-arched tunnel at each section end (`world/portals.ts`); E at a portal takes you to the neighbouring section. Walking or flying over the crest works too.
 - **Golden-hour cheat:** on by default as a bright zone along the axis at dawn and dusk; the "Golden-hour light zone" setting (World) turns it off for the physically plain overhead tube.
 - **The far side:** it is the same section's terrain, rendered as the low-resolution far shell, so what you see overhead in Bob mode is really there.
-- **Not canon, invented here:** the Quinlan's exact look, town and river names, the numbering, the look of Anek's birds, the maintenance hatch and all mural subjects.
+- **Not canon, invented here:** the Quinlan's exact look (the model follows the project owner's concept: a platypus-beaver with a bill and buck teeth, in travelling gear), town and river names, the numbering, the look of Anek's birds, the maintenance hatch and all mural subjects.
 
 ## Testing
 
 The F3 panel (`ui/debugPanel.ts`) tunes time, haze, LOD and vision live, jumps between towns and sections, and can x-ray the structural bulkheads inside the barrier rings (`world/bulkhead.ts`, spec 4.3).
 
-There is no unit-test suite. Development used headless Chromium (Playwright with SwiftShader) driving `?test` mode: step the simulation, wait for the workers, render, and compare screenshots. `npm run build` type-checks the whole project. The model and intro have standalone preview pages at `/src/npc/preview.html` and `/src/intro/preview.html` in the dev server.
+There is no unit-test suite. Development used headless Chromium (Playwright with SwiftShader) driving `?test` mode: step the simulation, wait for the workers, render, and compare screenshots. `npm run build` type-checks the whole project. The model and intro have standalone preview pages at `/src/npc/preview.html` and `/src/intro/preview.html` in the dev server. The model preview shows the textured Quinlan's three LODs in every gait (`?procedural` for the old model, `?pose={...}` to try pose adjustments).
 
 Frame rates were only measured with software rendering, so they say nothing about real GPUs. Quality presets (Settings → Graphics) scale terrain detail, shadows, grass density, pixel ratio and the vision render size.
 

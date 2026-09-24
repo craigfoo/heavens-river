@@ -78,7 +78,7 @@ export const QUINLAN_HEIGHT = 1.2;
  */
 export const QUINLAN_NOMINAL_SPEED = { walk: 1.5, run: 7.0, swim: 3.0 } as const;
 
-type V3 = [number, number, number];
+export type V3 = [number, number, number];
 
 /** Joint pivots (model space, metres). L = -X side, R = +X side. */
 export const QUINLAN_JOINTS = {
@@ -95,6 +95,30 @@ export const QUINLAN_JOINTS = {
   tail: [0, 0.25, 0.14] as V3,
 };
 const EYE_R: V3 = [0.138, 1.07, -0.035];
+
+/** Joints of a rigged mesh model (right side; the left mirrors X), from its asset file. */
+export interface QuinlanRigInfo {
+  joints: { hip: V3; spine: V3; neck: V3; jaw: V3; shoulder: V3; elbow: V3; legHip: V3; tail: V3; eye: V3 };
+  /** How the poses adapt to this body (radians, metres). */
+  pose?: Partial<QuinlanRigPose>;
+}
+
+export interface QuinlanRigPose {
+  /** How far the body already leans forward at rest, compared with the procedural one. */
+  lean: number;
+  /** How much higher the tail rises at rest. */
+  tailUp: number;
+  /** Lift while galloping on all fours. */
+  runY: number;
+  /** Extra height while swimming (negative = deeper). */
+  swimY: number;
+  /** Extra lean back while sitting. */
+  sitBack: number;
+  /** Scale of the jaw movements. */
+  jaw: number;
+}
+
+const RIG_POSE_DEFAULTS: QuinlanRigPose = { lean: 0, tailUp: 0, runY: 0, swimY: 0, sitBack: 0, jaw: 1 };
 const EYE_RADIUS = 0.05;
 
 // ---------------------------------------------------------------------------
@@ -1002,15 +1026,16 @@ export function createQuinlanAnimAttribute(count: number): InstancedBufferAttrib
 
 /**
  * A geometry for one InstancedMesh: shares the base buffers and index of `base`
- * (from createQuinlanGeometry) and adds its own `aAnim` instanced attribute.
+ * (from createQuinlanGeometry, or a LOD of the rigged mesh model) and adds its
+ * own `aAnim` instanced attribute (or `anim`, to keep one across a swap).
  */
-export function createQuinlanInstancedGeometry(base: BufferGeometry, count: number): BufferGeometry {
+export function createQuinlanInstancedGeometry(base: BufferGeometry, count: number, anim?: InstancedBufferAttribute): BufferGeometry {
   const g = new BufferGeometry();
-  for (const name of ['position', 'normal', 'color', 'aPart', 'aPivot', 'aSkin']) g.setAttribute(name, base.getAttribute(name));
+  for (const [name, attr] of Object.entries(base.attributes)) if (name !== 'aAnim') g.setAttribute(name, attr);
   g.setIndex(base.getIndex());
   g.boundingBox = base.boundingBox;
   g.boundingSphere = base.boundingSphere;
-  g.setAttribute('aAnim', createQuinlanAnimAttribute(count));
+  g.setAttribute('aAnim', anim ?? createQuinlanAnimAttribute(count));
   g.userData = { ...base.userData };
   return g;
 }
@@ -1039,12 +1064,38 @@ const accentLum = (PAL.accent[0] + PAL.accent[1] + PAL.accent[2]) / 3;
  *   quinlanAnimate(inout vec3 position, inout vec3 normal)
  * and optionally quinlanColor(vec3 vertexColor) for the per-instance tints.
  */
-export const quinlanAnimParsGlsl = /* glsl */ `
+function animParsGlsl(rig: QuinlanRigInfo | null): string {
+  const J = rig
+    ? { hip: rig.joints.hip, spine: rig.joints.spine, neck: rig.joints.neck, eye: rig.joints.eye, elbow: rig.joints.elbow }
+    : { hip: QUINLAN_JOINTS.hip, spine: QUINLAN_JOINTS.spine, neck: QUINLAN_JOINTS.neck, eye: EYE_R, elbow: QUINLAN_JOINTS.elbowR };
+  const pivots = rig
+    ? (() => {
+        const j = rig.joints;
+        const mx = (v: V3): V3 => [-v[0], v[1], v[2]];
+        // indexed by part: body, head, jaw, armL, armR, legL, legR, tail
+        return [j.hip, j.neck, j.jaw, mx(j.shoulder), j.shoulder, mx(j.legHip), j.legHip, j.tail].map(v3).join(', ');
+      })()
+    : '';
+  const pose = { ...RIG_POSE_DEFAULTS, ...(rig?.pose ?? {}) };
+  return /* glsl */ `
 #ifndef QUINLAN_ANIM_PARS
 #define QUINLAN_ANIM_PARS
+${rig ? '#define QUINLAN_RIG' : ''}
+#ifdef QUINLAN_RIG
+attribute vec4 aQ0; // part / 255, joint weight, fur tint weight, gear dye weight
+attribute vec4 aQ1; // upper-body bend weight, elbow weight, belly, chest (breathing)
+const vec3 Q_PIVOTS[8] = vec3[8]( ${pivots} );
+const float Q_LEAN = ${f(pose.lean)};
+const float Q_TAIL_UP = ${f(pose.tailUp)};
+const float Q_RUN_Y = ${f(pose.runY)};
+const float Q_SWIM_Y = ${f(pose.swimY)};
+const float Q_SIT_BACK = ${f(pose.sitBack)};
+const float Q_JAW = ${f(pose.jaw)};
+#else
 attribute float aPart;
 attribute vec3 aPivot;
 attribute vec3 aSkin;
+#endif
 attribute vec4 aAnim;
 
 // Materials whose vertex shader derives normals (objectNormal / transformedNormal / vNormal).
@@ -1061,11 +1112,11 @@ attribute vec4 aAnim;
 
 const float Q_PI = 3.14159265;
 const float Q_TAU = 6.28318531;
-const vec3 Q_HIP = ${v3(QUINLAN_JOINTS.hip)};
-const vec3 Q_SPINE = ${v3(QUINLAN_JOINTS.spine)};
-const vec3 Q_NECK = ${v3(QUINLAN_JOINTS.neck)};
-const vec3 Q_EYE = ${v3(EYE_R)};
-const vec3 Q_ELBOW = ${v3(QUINLAN_JOINTS.elbowR)};
+const vec3 Q_HIP = ${v3(J.hip)};
+const vec3 Q_SPINE = ${v3(J.spine)};
+const vec3 Q_NECK = ${v3(J.neck)};
+const vec3 Q_EYE = ${v3(J.eye)};
+const vec3 Q_ELBOW = ${v3(J.elbow)};
 const float Q_ACCENT_LUM = ${f(accentLum)};
 const vec3 Q_ACCENTS[${ACCENTS_SRGB.length}] = vec3[${ACCENTS_SRGB.length}](
     ${accentsGlsl}
@@ -1184,6 +1235,9 @@ QPose qRun( float t, float ph, float v ) {
   float a = Q_TAU * ( t * 2.6 + ph );
   float s = sin( a );
   float pitch = -1.22 + 0.12 * s;
+#ifdef QUINLAN_RIG
+  pitch += Q_LEAN; // this body already leans forward
+#endif
   P.root.x = pitch;
   P.rootT.y = 0.04 * max( 0.0, sin( a + 0.8 ) ) - 0.015;
   P.spine.x = 0.1 * sin( a + 0.5 );
@@ -1198,6 +1252,10 @@ QPose qRun( float t, float ph, float v ) {
   P.tail = vec3( -pitch * 0.92 + 0.18 * sin( a - 1.2 ), 0.05 * sin( a ), 0.0 );
   P.wave = vec3( 0.05, a - 1.0, 1.0 );
   P.jaw.x = 0.1 + 0.05 * sin( 2.0 * a );
+#ifdef QUINLAN_RIG
+  P.tail.x += Q_TAIL_UP * 0.8;
+  P.rootT.y += Q_RUN_Y;
+#endif
   P.face.y = qBlink( t, ph );
   return P;
 }
@@ -1219,6 +1277,12 @@ QPose qSwim( float t, float ph, float v ) {
   P.tail = vec3( 1.4 + 0.1 * sin( a - 0.7 ), 0.0, 0.0 );
   P.wave = vec3( 0.11, 2.0 * a, 1.2 );
   P.face.y = qBlink( t, ph );
+#ifdef QUINLAN_RIG
+  P.root.x += Q_LEAN;
+  P.head.x -= Q_LEAN;
+  P.tail.x += Q_TAIL_UP;
+  P.rootT.y += Q_SWIM_Y;
+#endif
   return P;
 }
 
@@ -1244,6 +1308,11 @@ QPose qSing( float t, float ph, float v ) {
   float on = smoothstep( 0.0, 0.06, phr ) * ( 1.0 - smoothstep( 0.84, 0.92, phr ) );
   P.jaw.x = 0.03 + on * ( 0.16 + 0.2 * ( 0.5 + 0.5 * n ) );
   P.face.y = 0.55 + 0.45 * ( 1.0 - on );
+#ifdef QUINLAN_RIG
+  P.root.x += Q_SIT_BACK;
+  P.head.x -= Q_SIT_BACK;
+  P.tail.x += Q_TAIL_UP * 0.9;
+#endif
   return P;
 }
 
@@ -1298,18 +1367,30 @@ QPose qMixPose( QPose a, QPose b, float k ) {
 }
 
 void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
+  vec3 r0 = p;
+  float spineW = 0.0;
+  mat3 M;
+#ifdef QUINLAN_RIG
+  int part = int( aQ0.x * 255.0 + 0.5 );
+  float w = aQ0.y;
+  vec3 piv = Q_PIVOTS[ clamp( part, 0, 7 ) ];
+  float ws = aQ1.x;
+  // variant belly and breathing: push the skin out along its normal
+  p += n * ( ( qH( v, 2.0 ) - 0.5 ) * 0.045 * aQ1.z + 0.005 * P.face.x * aQ1.w );
+  float bodyScale = 1.0;
+#else
   int part = int( aPart + 0.5 );
   float w = aSkin.x;
   vec3 piv = aPivot;
-  vec3 r0 = p;
   float ws = smoothstep( 0.36, 0.74, r0.y );
-  float spineW = 0.0;
-  mat3 M;
   // variant proportions: belly, head size, tail length; plus breathing
   float belly = smoothstep( 0.12, 0.3, r0.y ) * ( 1.0 - smoothstep( 0.55, 0.82, r0.y ) );
   float chest = smoothstep( 0.42, 0.6, r0.y ) * ( 1.0 - smoothstep( 0.78, 0.92, r0.y ) );
   float bodyScale = 1.0 + ( qH( v, 2.0 ) - 0.5 ) * 0.12 * belly + 0.016 * P.face.x * chest;
+#endif
   if ( part == 0 ) {
+#ifndef QUINLAN_RIG
+    // (the rigged mesh's neck blends through its weights instead)
     p.xz *= bodyScale;
     float nk = smoothstep( 0.83, 0.97, r0.y ); // the neck follows the head a little
     if ( nk > 0.0 ) {
@@ -1317,14 +1398,21 @@ void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
       p = Q_NECK + M * ( p - Q_NECK );
       n = M * n;
     }
+#endif
     spineW = ws;
   } else if ( part <= 2 ) {
     if ( part == 2 ) {
-      M = qRotY( P.jaw.z * w ) * qRotX( -P.jaw.x * w );
+      float jw = w;
+#ifdef QUINLAN_RIG
+      jw *= Q_JAW;
+#endif
+      M = qRotY( P.jaw.z * jw ) * qRotX( -P.jaw.x * jw );
       p = piv + M * ( p - piv );
       n = M * n;
-      p.x += P.jaw.y * w;
-    } else if ( aSkin.z > 1.5 ) {
+      p.x += P.jaw.y * jw;
+    }
+#ifndef QUINLAN_RIG
+    else if ( aSkin.z > 1.5 ) {
       // eyes: blink / squint by squashing towards the eye's horizontal plane
       // (and flattening against the head so a closed eye reads as a lid line)
       vec3 ec = vec3( sign( r0.x ) * Q_EYE.x, Q_EYE.yz );
@@ -1334,18 +1422,30 @@ void qApply( QPose P, float v, inout vec3 p, inout vec3 n ) {
       n = normalize( vec3( n.x / ox, n.y / max( o, 0.25 ), n.z ) );
       if ( aSkin.z > 2.5 ) p = ec + ( p - ec ) * smoothstep( 0.2, 0.6, o );
     }
+#endif
+    float hw = part == 1 ? w : 1.0;
     float hs = 1.0 + ( qH( v, 3.0 ) - 0.5 ) * 0.08;
+#ifdef QUINLAN_RIG
+    // the head blends into the neck: scale and bend with its weight
+    hs = mix( 1.0, hs, hw );
+    spineW = mix( ws, 1.0, hw );
+#else
+    spineW = 1.0;
+#endif
     p = Q_NECK + ( p - Q_NECK ) * hs;
-    M = qEuler( P.head * ( part == 1 ? w : 1.0 ) );
+    M = qEuler( P.head * hw );
     p = Q_NECK + M * ( p - Q_NECK );
     n = M * n;
-    spineW = 1.0;
   } else if ( part <= 4 ) {
     bool left = part == 3;
     p.xz *= mix( bodyScale, 1.0, w ); // the torso edge of the webbing stays on the torso
     // elbow: the forearm, hand and the lower arm edge of the webbing flex about the elbow
     vec3 ep = vec3( sign( r0.x ) * Q_ELBOW.x, Q_ELBOW.yz );
+#ifdef QUINLAN_RIG
+    float we = aQ1.y * w;
+#else
     float we = ( 1.0 - smoothstep( Q_ELBOW.y - 0.045, Q_ELBOW.y + 0.045, r0.y ) ) * w;
+#endif
     M = qRotX( ( left ? P.elbow.x : P.elbow.y ) * we );
     p = ep + M * ( p - ep );
     n = M * n;
@@ -1392,6 +1492,27 @@ void quinlanAnimate( inout vec3 p, inout vec3 n ) {
   qApply( P, aAnim.w, p, n );
 }
 
+#ifdef QUINLAN_RIG
+// Dyes for the gear webbing: multipliers on the source colour (olive, leather,
+// madder, woad, undyed, soot, teal, weld).
+const vec3 Q_GEAR[8] = vec3[8](
+  vec3( 1.0 ), vec3( 1.35, 0.95, 0.7 ), vec3( 1.75, 0.72, 0.55 ), vec3( 0.72, 0.92, 1.5 ),
+  vec3( 1.55, 1.42, 1.12 ), vec3( 0.55 ), vec3( 0.66, 1.12, 1.18 ), vec3( 1.55, 1.3, 0.55 )
+);
+
+/**
+ * Per-vertex colour multiplier: instanceColor tints the fur (at half strength:
+ * the painted fur is already warm and saturated), the variant dyes the gear.
+ */
+vec3 quinlanTint() {
+  vec3 t = vec3( 1.0 );
+  #ifdef USE_INSTANCING_COLOR
+    t = mix( t, instanceColor.rgb, 0.55 * aQ0.z );
+  #endif
+  int i = int( floor( qH( aAnim.w, 1.0 ) * 8.0 ) );
+  return t * mix( vec3( 1.0 ), Q_GEAR[ clamp( i, 0, 7 ) ], aQ0.w );
+}
+#else
 vec3 qAccent( float v ) {
   int i = int( floor( qH( v, 1.0 ) * ${f(ACCENTS_SRGB.length)} ) );
   return Q_ACCENTS[ clamp( i, 0, ${ACCENTS_SRGB.length - 1} ) ];
@@ -1406,7 +1527,16 @@ vec3 quinlanColor( vec3 c ) {
   return mix( c, qAccent( aAnim.w ) * ( dot( c, vec3( 0.33333 ) ) / Q_ACCENT_LUM ), acc );
 }
 #endif
+#endif
 `;
+}
+
+export const quinlanAnimParsGlsl = animParsGlsl(null);
+
+/** Vertex-shader declarations for a rigged mesh model (see quinlanAsset.ts). */
+export function quinlanRigAnimParsGlsl(rig: QuinlanRigInfo): string {
+  return animParsGlsl(rig);
+}
 
 /**
  * Vertex-shader statements. Inject right after `#include <begin_vertex>`.
@@ -1446,7 +1576,13 @@ export const quinlanAnimGlsl = /* glsl */ `
     #endif
   #endif
   #if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
-    vColor.rgb = quinlanColor( vec3( color.rgb ) );
+    #if defined( QUINLAN_RIG ) && defined( QUINLAN_TEXTURED )
+      vColor.rgb = quinlanTint();
+    #elif defined( QUINLAN_RIG )
+      vColor.rgb = color.rgb * quinlanTint();
+    #else
+      vColor.rgb = quinlanColor( vec3( color.rgb ) );
+    #endif
   #endif
 }
 `;
@@ -1458,6 +1594,17 @@ export const quinlanAnimGlsl = /* glsl */ `
 export function patchQuinlanVertexShader(vertexShader: string, declareTime = true): string {
   return vertexShader
     .replace('#include <common>', `#include <common>\n${declareTime ? 'uniform float uTime;\n' : ''}${quinlanAnimParsGlsl}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${quinlanAnimGlsl}`);
+}
+
+/**
+ * Patch a built-in vertex shader for the rigged mesh model (quinlanAsset.ts).
+ * `textured`: the LOD samples the albedo map instead of vertex colours.
+ */
+export function patchQuinlanRigVertexShader(vertexShader: string, rig: QuinlanRigInfo, textured: boolean, declareTime = true): string {
+  const pars = `${textured ? '#define QUINLAN_TEXTURED\n' : ''}${declareTime ? 'uniform float uTime;\n' : ''}${quinlanRigAnimParsGlsl(rig)}`;
+  return vertexShader
+    .replace('#include <common>', `#include <common>\n${pars}`)
     .replace('#include <begin_vertex>', `#include <begin_vertex>\n${quinlanAnimGlsl}`);
 }
 

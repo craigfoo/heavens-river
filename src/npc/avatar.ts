@@ -7,8 +7,9 @@ import { damp } from '../core/math';
 import type { Player } from '../player/player';
 import { patchWorldMaterial } from '../render/bend';
 import { U } from '../render/uniforms';
+import type { QuinlanAsset } from './quinlanAsset';
 import { createQuinlanGeometry, createQuinlanInstancedGeometry, quinlanAnimGlsl, quinlanAnimParsGlsl, quinlanFurPalette, QUINLAN_GAIT, QUINLAN_NOMINAL_SPEED } from './quinlanModel';
-import { quinlanDepthMaterial, quinlanWorldMaterial } from './quinlanMaterials';
+import { quinlanDepthMaterial, quinlanRigMaterials, quinlanWorldMaterial } from './quinlanMaterials';
 
 /** Poses selectable in photo mode (null = follow the player's movement). */
 export const AVATAR_POSES: { name: string; gait: number }[] = [
@@ -26,6 +27,7 @@ export class PlayerAvatar {
   private anim: InstancedBufferAttribute;
   private shadowOnly: MeshLambertMaterial;
   private visibleMat: MeshLambertMaterial;
+  private shown = false;
   private gait = 0;
   private clock = 0;
   readonly variant = 4242;
@@ -59,7 +61,20 @@ export class PlayerAvatar {
   }
 
   setVisible(v: boolean) {
+    this.shown = v;
     this.mesh.material = v ? this.visibleMat : this.shadowOnly;
+  }
+
+  /** Switch to the textured model (its most detailed LOD). */
+  useAsset(asset: QuinlanAsset) {
+    const m = quinlanRigMaterials(asset);
+    const old = this.mesh.geometry;
+    this.mesh.geometry = createQuinlanInstancedGeometry(asset.lods[0], 1, this.anim);
+    old.dispose();
+    this.visibleMat = m.textured;
+    this.shadowOnly = m.shadowOnly;
+    this.mesh.customDepthMaterial = m.depth;
+    this.setVisible(this.shown);
   }
 
   update(dt: number, p: Player) {

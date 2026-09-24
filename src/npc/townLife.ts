@@ -1,10 +1,11 @@
 // Ambient Quinlan life in settlements (spec 7.1 "Life and sound"): walkers on
 // the streets, stall keepers, dock watchers, singing circles in the squares,
 // friends chatting, the odd shouting match, swimmers in the river and kids
-// diving off the piers. Everyone is drawn with two instanced meshes (a detailed
-// one for the few nearest Quinlans) that are refilled every frame.
+// diving off the piers. Everyone is drawn with a few instanced meshes, one per
+// level of detail (the most detailed for the nearest Quinlans), that are
+// refilled every frame.
 
-import { Color, DynamicDrawUsage, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3 } from 'three';
+import { Color, DynamicDrawUsage, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Quaternion, Vector3, type BufferGeometry, type Material } from 'three';
 import { frame, wrapS } from '../coords/cylinder';
 import { clamp, damp, smoothstep } from '../core/math';
 import { Rng, seedFor } from '../core/rng';
@@ -12,12 +13,10 @@ import type { LoadedTown, TownManager } from '../towns/townManager';
 import type { TownSite } from '../world/gen/settlements';
 import type { WorldQuery } from '../world/worldQuery';
 import { createQuinlanGeometry, createQuinlanInstancedGeometry, quinlanFurPalette, QUINLAN_GAIT, QUINLAN_NOMINAL_SPEED } from './quinlanModel';
-import { quinlanDepthMaterial, quinlanWorldMaterial } from './quinlanMaterials';
+import type { QuinlanAsset } from './quinlanAsset';
+import { quinlanDepthMaterial, quinlanRigMaterials, quinlanWorldMaterial } from './quinlanMaterials';
 
-const MAX_LOW = 700;
-const MAX_HIGH = 36;
 const RENDER_DIST = 380;
-const HIGH_DIST = 26;
 /** Towns whose edge is within this distance of the camera are simulated. */
 const ACTIVE_PAD = 450;
 const GRID = 32;
@@ -88,12 +87,28 @@ const TAU = Math.PI * 2;
 const wrapAngle = (a: number) => a - TAU * Math.round(a / TAU);
 const headingOf = (dx: number, dz: number) => Math.atan2(-dx, -dz);
 
+/** One level of detail: an instanced mesh refilled every frame. */
+interface Tier {
+  mesh: InstancedMesh;
+  anim: InstancedBufferAttribute;
+  /** Most Quinlans drawn at this detail. */
+  max: number;
+  /** Only Quinlans nearer than this (m) use this tier. */
+  dist: number;
+  count: number;
+}
+
+interface TierSpec {
+  geometry: BufferGeometry;
+  material: Material;
+  max: number;
+  dist: number;
+}
+
 export class TownLife {
   readonly group = new Group();
-  private low: InstancedMesh;
-  private high: InstancedMesh;
-  private lowAnim: InstancedBufferAttribute;
-  private highAnim: InstancedBufferAttribute;
+  /** Nearest first. */
+  private tiers: Tier[] = [];
   private pops = new Map<number, Pop>();
   private towns: TownManager;
   private world: WorldQuery;
@@ -108,15 +123,42 @@ export class TownLife {
   constructor(towns: TownManager, world: WorldQuery) {
     this.towns = towns;
     this.world = world;
+    // the procedural model until the textured one has loaded (useAsset)
     const mat = quinlanWorldMaterial();
-    const depth = quinlanDepthMaterial();
-    const lowGeo = createQuinlanInstancedGeometry(createQuinlanGeometry('low'), MAX_LOW);
-    const highGeo = createQuinlanInstancedGeometry(createQuinlanGeometry('high'), MAX_HIGH);
-    this.low = new InstancedMesh(lowGeo, mat, MAX_LOW);
-    this.high = new InstancedMesh(highGeo, mat, MAX_HIGH);
-    this.lowAnim = lowGeo.getAttribute('aAnim') as InstancedBufferAttribute;
-    this.highAnim = highGeo.getAttribute('aAnim') as InstancedBufferAttribute;
-    for (const m of [this.low, this.high]) {
+    this.setTiers(
+      [
+        { geometry: createQuinlanGeometry('high'), material: mat, max: 36, dist: 26 },
+        { geometry: createQuinlanGeometry('low'), material: mat, max: 700, dist: Infinity },
+      ],
+      quinlanDepthMaterial(),
+    );
+    towns.onLoaded.push((t) => this.populate(t));
+    towns.onUnloaded.push((t) => this.pops.delete(t.site.id));
+  }
+
+  /** Switch everyone to the textured model: near (textured), mid and far LODs. */
+  useAsset(asset: QuinlanAsset) {
+    const m = quinlanRigMaterials(asset);
+    const n = asset.lods.length;
+    this.setTiers(
+      [
+        { geometry: asset.lods[0], material: m.textured, max: 30, dist: 20 },
+        { geometry: asset.lods[Math.min(1, n - 1)], material: m.plain, max: 140, dist: 55 },
+        { geometry: asset.lods[n - 1], material: m.plain, max: 700, dist: Infinity },
+      ],
+      m.depth,
+    );
+  }
+
+  private setTiers(specs: TierSpec[], depth: Material) {
+    for (const t of this.tiers) {
+      this.group.remove(t.mesh);
+      t.mesh.geometry.dispose();
+      t.mesh.dispose();
+    }
+    this.tiers = specs.map((s) => {
+      const geo = createQuinlanInstancedGeometry(s.geometry, s.max);
+      const m = new InstancedMesh(geo, s.material, s.max);
       m.name = 'quinlans';
       m.count = 0;
       m.frustumCulled = false;
@@ -131,11 +173,10 @@ export class TownLife {
       m.matrixWorldAutoUpdate = false;
       m.matrixWorld.identity();
       this.group.add(m);
-    }
-    this.lowAnim.setUsage(DynamicDrawUsage);
-    this.highAnim.setUsage(DynamicDrawUsage);
-    towns.onLoaded.push((t) => this.populate(t));
-    towns.onUnloaded.push((t) => this.pops.delete(t.site.id));
+      const anim = geo.getAttribute('aAnim') as InstancedBufferAttribute;
+      anim.setUsage(DynamicDrawUsage);
+      return { mesh: m, anim, max: s.max, dist: s.dist, count: 0 };
+    });
   }
 
   // ------------------------------------------------------------------ population
@@ -436,17 +477,11 @@ export class TownLife {
     };
     const ox0 = frame.originS;
     const oz0 = frame.originZ;
-    let nLow = 0;
-    let nHigh = 0;
+    const tiers = this.tiers;
+    for (const t of tiers) t.count = 0;
     let singers = 0;
     let crowd = 0;
     let active = 0;
-    const lowArr = this.low.instanceMatrix.array as Float32Array;
-    const highArr = this.high.instanceMatrix.array as Float32Array;
-    const lowCol = this.low.instanceColor!.array as Float32Array;
-    const highCol = this.high.instanceColor!.array as Float32Array;
-    const lowAnim = this.lowAnim.array as Float32Array;
-    const highAnim = this.highAnim.array as Float32Array;
     for (const pop of this.pops.values()) {
       const { site, town } = pop;
       const dTown = Math.hypot(wrapS(site.s - cam.s), site.z - cam.z) - site.radius;
@@ -474,21 +509,18 @@ export class TownLife {
           crowd++;
         }
         if (d > RENDER_DIST) continue;
-        let arr: Float32Array;
-        let col: Float32Array;
-        let anim: Float32Array;
-        let slot: number;
-        if (d < HIGH_DIST && nHigh < MAX_HIGH) {
-          arr = highArr;
-          col = highCol;
-          anim = highAnim;
-          slot = nHigh++;
-        } else if (nLow < MAX_LOW) {
-          arr = lowArr;
-          col = lowCol;
-          anim = lowAnim;
-          slot = nLow++;
-        } else continue;
+        let tier: Tier | null = null;
+        for (const t of tiers) {
+          if (d < t.dist && t.count < t.max) {
+            tier = t;
+            break;
+          }
+        }
+        if (!tier) continue;
+        const slot = tier.count++;
+        const arr = tier.mesh.instanceMatrix.array as Float32Array;
+        const col = tier.mesh.instanceColor!.array as Float32Array;
+        const anim = tier.anim.array as Float32Array;
         _q.setFromAxisAngle(_up, n.yaw);
         _p.set(ax + n.x, n.h, az + n.z);
         _s.setScalar(n.scale);
@@ -503,18 +535,18 @@ export class TownLife {
         anim[slot * 4 + 3] = n.variant;
       }
     }
-    this.low.count = nLow;
-    this.high.count = nHigh;
-    for (const m of [this.low, this.high]) {
-      m.instanceMatrix.needsUpdate = true;
-      m.instanceColor!.needsUpdate = true;
+    let drawn = 0;
+    for (const t of tiers) {
+      t.mesh.count = t.count;
+      t.mesh.instanceMatrix.needsUpdate = true;
+      t.mesh.instanceColor!.needsUpdate = true;
+      t.anim.needsUpdate = true;
+      drawn += t.count;
     }
-    this.lowAnim.needsUpdate = true;
-    this.highAnim.needsUpdate = true;
     this.singing = damp(this.singing, clamp(singers / 6, 0, 1), 1.5, dt);
     this.crowd = damp(this.crowd, clamp(crowd / 25, 0, 1), 1.5, dt);
     this.stats.active = active;
-    this.stats.drawn = nLow + nHigh;
+    this.stats.drawn = drawn;
   }
 
   private step(pop: Pop, n: Npc, dt: number, px: number, pz: number) {

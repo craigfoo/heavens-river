@@ -2,6 +2,8 @@
 // low detail) plus a turntable, and a single-model "studio" view. Open
 // /src/npc/preview.html on the Vite dev server. Add ?manual to stop the render
 // loop and drive frames from the console / Playwright via window.__quinlan.shot().
+// It shows the textured model (public/models/, rows = LOD 0, 1, 2) when it loads;
+// ?procedural shows the procedural one instead.
 
 import {
   ACESFilmicToneMapping,
@@ -20,6 +22,8 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   MeshToonMaterial,
+  MeshDepthMaterial,
+  RGBADepthPacking,
   PCFShadowMap,
   PerspectiveCamera,
   PlaneGeometry,
@@ -42,11 +46,17 @@ import {
   createQuinlanGeometry,
   createQuinlanInstancedGeometry,
   createQuinlanPreviewMaterial,
+  patchQuinlanRigVertexShader,
   patchQuinlanVertexShader,
   quinlanFurPalette,
 } from './quinlanModel';
+import { loadQuinlanAsset } from './quinlanAsset';
 
-const manual = new URLSearchParams(location.search).has('manual');
+const params = new URLSearchParams(location.search);
+const manual = params.has('manual');
+const asset = params.has('procedural') ? null : await loadQuinlanAsset();
+// ?pose={"lean":0.3,...} overrides the model's pose adjustments (for tuning)
+if (asset && params.has('pose')) asset.rig.pose = { ...asset.rig.pose, ...JSON.parse(params.get('pose')!) };
 const uTime = { value: 0 };
 
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -98,19 +108,40 @@ scene.add(ground);
 const waterMat = new MeshStandardMaterial({ color: 0x3d7f96, transparent: true, opacity: 0.5, roughness: 0.15, depthWrite: false });
 
 // Quinlans
-const geoHigh = createQuinlanGeometry('high');
-const geoLow = createQuinlanGeometry('low');
-const mat = createQuinlanPreviewMaterial(uTime);
-const depthMat = createQuinlanDepthMaterial(uTime);
+const geoHigh = asset ? asset.lods[0] : createQuinlanGeometry('high');
+const geoMid = asset ? asset.lods[1] : geoHigh;
+const geoLow = asset ? asset.lods[asset.lods.length - 1] : createQuinlanGeometry('low');
+const mat = asset ? rigMaterial(true) : createQuinlanPreviewMaterial(uTime);
+const matVC = asset ? rigMaterial(false) : mat;
+const depthMat = asset ? rigDepthMaterial() : createQuinlanDepthMaterial(uTime);
+
+function rigMaterial(textured: boolean): Material {
+  const m = new MeshStandardMaterial({ vertexColors: true, map: textured ? asset!.albedo : null, roughness: 0.85, metalness: 0 });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = uTime;
+    shader.vertexShader = patchQuinlanRigVertexShader(shader.vertexShader, asset!.rig, textured);
+  };
+  m.customProgramCacheKey = () => `quinlan-rig-preview-${textured}`;
+  return m;
+}
+function rigDepthMaterial(): MeshDepthMaterial {
+  const m = new MeshDepthMaterial({ depthPacking: RGBADepthPacking });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = uTime;
+    shader.vertexShader = patchQuinlanRigVertexShader(shader.vertexShader, asset!.rig, false);
+  };
+  m.customProgramCacheKey = () => 'quinlan-rig-depth';
+  return m;
+}
 
 interface Crowd {
   mesh: InstancedMesh;
   anim: InstancedBufferAttribute;
 }
-function crowd(base: BufferGeometry, n: number, material: Material = mat): Crowd {
+function crowd(base: BufferGeometry, n: number, material?: Material): Crowd {
   const g = createQuinlanInstancedGeometry(base, n);
-  const mesh = new InstancedMesh(g, material, n);
-  mesh.customDepthMaterial = depthMat;
+  const mesh = new InstancedMesh(g, material ?? (base === geoHigh ? mat : matVC), n);
+  mesh.customDepthMaterial = material ? createQuinlanDepthMaterial(uTime) : depthMat;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   scene.add(mesh);
@@ -131,16 +162,17 @@ const one = new Vector3(1, 1, 1);
 const tmp = new Vector3();
 const col = new Color();
 
-const lineupHigh = crowd(geoHigh, GAITS.length * 2 + 1); // two high rows + turntable
+const lineupHigh = crowd(geoHigh, GAITS.length + 1); // first row + turntable
+const lineupMid = crowd(geoMid, GAITS.length);
 const lineupLow = crowd(geoLow, GAITS.length);
-const lineup: Crowd[] = [lineupHigh, lineupLow];
-const TURN = GAITS.length * 2;
+const lineup: Crowd[] = [lineupHigh, lineupMid, lineupLow];
+const TURN = GAITS.length;
 
 function layoutLineup(turn: number) {
   GAITS.forEach((gait, i) => {
     for (let r = 0; r < 3; r++) {
-      const c = r < 2 ? lineupHigh : lineupLow;
-      const idx = r < 2 ? i * 2 + r : i;
+      const c = lineup[r];
+      const idx = i;
       const y = gait === QUINLAN_GAIT.swim ? SWIM_Y : 0;
       m4.compose(tmp.set(COL_X(i), y, ROW_Z[r]), q.identity(), one);
       c.mesh.setMatrixAt(idx, m4);
@@ -190,7 +222,7 @@ function label(text: string, x: number, z: number): Sprite {
 }
 const labels = NAMES.map((n, i) => label(n, COL_X(i), -1.25));
 labels.push(label('turntable', COL_X(6.3), -1.25));
-['high', 'high', 'low'].forEach((t, r) => labels.push(label(t, COL_X(-1.05), ROW_Z[r])));
+(asset ? ['LOD 0', 'LOD 1', 'LOD 2'] : ['high', 'high', 'low']).forEach((t, r) => labels.push(label(t, COL_X(-1.05), ROW_Z[r])));
 
 // studio: one high and one low model
 const studioHigh = crowd(geoHigh, 1);
@@ -256,8 +288,9 @@ const MATERIALS: [string, Material][] = [
   ['normal', patched(new MeshNormalMaterial(), 'normal')],
   ['physical sheen', patched(new MeshPhysicalMaterial({ vertexColors: true, roughness: 0.8, sheen: 1, sheenColor: 0xd8b08a, sheenRoughness: 0.6 }), 'physical')],
 ];
+const geoProcedural = asset ? createQuinlanGeometry('high') : geoHigh;
 const materialRow = MATERIALS.map(([name, m], i) => {
-  const c = crowd(geoHigh, 1, m);
+  const c = crowd(geoProcedural, 1, m);
   const x = -(i - (MATERIALS.length - 1) / 2) * 1.05;
   m4.compose(tmp.set(x, 0, 0), q.identity(), one);
   c.mesh.setMatrixAt(0, m4);
