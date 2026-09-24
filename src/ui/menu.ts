@@ -16,6 +16,7 @@ const GROUPS: { title: string; opts: Opt[] }[] = [
       { kind: 'range', key: 'fov', label: 'Field of view', min: 60, max: 140, step: 1, fmt: (v) => `${v}°` },
       { kind: 'toggle', key: 'grass', label: 'Grass' },
       { kind: 'toggle', key: 'shadows', label: 'Shadows' },
+      { kind: 'toggle', key: 'ao', label: 'Ambient occlusion' },
     ],
   },
   {

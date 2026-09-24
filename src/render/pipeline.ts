@@ -1,4 +1,5 @@
-// Renderer + post-processing chain: HDR scene → bloom → grading → ACES → vignette.
+// Renderer + post-processing chain: HDR scene → ambient occlusion → god rays →
+// bloom → grading → ACES → vignette.
 
 import {
   BlendFunction,
@@ -13,7 +14,9 @@ import {
   VignetteEffect,
   DepthOfFieldEffect,
 } from 'postprocessing';
+import { N8AOPostPass, type N8AOQuality } from 'n8ao';
 import {
+  Color,
   HalfFloatType,
   NoToneMapping,
   PerspectiveCamera,
@@ -91,6 +94,9 @@ export class Pipeline {
   readonly dof: DepthOfFieldEffect;
   readonly renderPass: RenderPass;
   readonly vision: VisionPass;
+  /** Screen-space ambient occlusion (N8AO): contact shading under eaves, feet, props. */
+  readonly ao: N8AOPostPass;
+  private aoWanted = true;
   readonly shafts = new SunShaftsEffect();
   private shaftsPass: EffectPass;
   private effectPass: EffectPass;
@@ -126,6 +132,18 @@ export class Pipeline {
     this.vision = new VisionPass(scene, camera, opts.msaa);
     this.vision.enabled = false;
     this.composer.addPass(this.vision);
+    // AO reads the depth of the scene render (logarithmic depth is detected) and
+    // rebuilds normals from it, so the vertex-bent geometry needs no extra pass
+    this.ao = new N8AOPostPass(scene, camera, 1, 1);
+    const c = this.ao.configuration;
+    c.aoRadius = 2; // metres: doorways, eaves, feet, stalls
+    c.distanceFalloff = 1;
+    c.intensity = 3;
+    c.color = new Color(0.035, 0.04, 0.06); // bounce light from the sky
+    c.halfRes = true;
+    c.transparencyAware = false; // the water is drawn with its own depth; no second pass
+    c.gammaCorrection = false; // HDR linear input, graded later
+    this.composer.addPass(this.ao);
     this.shaftsPass = new EffectPass(camera, this.shafts);
     this.composer.addPass(this.shaftsPass);
     this.bloom = new BloomEffect({
@@ -154,13 +172,22 @@ export class Pipeline {
     this.dofPass.enabled = on;
   }
 
+  /** Ambient occlusion on or off, and its sample quality. */
+  setAO(on: boolean, quality: N8AOQuality = 'Medium') {
+    this.aoWanted = on;
+    this.ao.setQualityMode(quality);
+    this.ao.configuration.halfRes = true;
+    this.ao.enabled = on && !this.vision.enabled;
+  }
+
   /** Quinlan vision: replaces the normal scene render with a multi-view composite. */
   setVision(mode: 'off' | 'panorama' | 'split') {
     const on = mode !== 'off';
     this.renderPass.enabled = !on;
     this.vision.enabled = on;
-    // the multi-view composite has no matching depth buffer for the rays
+    // the multi-view composite has no matching depth buffer for the rays or the AO
     this.shafts.suppressed = on;
+    this.ao.enabled = this.aoWanted && !on;
     if (on) this.vision.setMode(mode);
   }
 

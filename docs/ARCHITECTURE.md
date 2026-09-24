@@ -26,7 +26,8 @@ main.ts ─ App (renderer, world streaming, frame loop)
 - The light tube is overhead all day, so golden hour is an artistic liberty (spec 13): a bright zone slides along the axis at dawn and dusk, giving low, warm, directional light. It can be switched off in the settings.
 - `render/atmosphereGlsl.ts` is the analytic aerial perspective of a spinning habitat: air density falls as exp(-k(R² − r²)) toward the axis, integrated in closed form (Dawson function), with Rayleigh and Mie scattering, the hologram shell at 24 km (adjustable), stars and the underwater look. Every world shader ends with `hrComposite`.
 - `sky/sky.ts` draws whatever a ray sees when it hits nothing: the hologram, the haze toward the section ends, and in Bob mode (B) the light tube along the axis.
-- Post-processing (`render/pipeline.ts`): HDR render, screen-space god rays (`sunShafts.ts`), optional depth of field (photo mode), bloom, grading, ACES tone mapping, vignette, SMAA or MSAA.
+- Post-processing (`render/pipeline.ts`): HDR render, ambient occlusion, screen-space god rays (`sunShafts.ts`), optional depth of field (photo mode), bloom, grading, ACES tone mapping, vignette, SMAA or MSAA.
+- Ambient occlusion is [N8AO](https://github.com/N8python/n8ao) (ISC) at half resolution. It rebuilds positions and normals from the depth buffer, so the bent geometry needs no extra pass. N8AO decodes logarithmic depth through a standard perspective depth, which has no precision left with a 4,000 km far plane; a small Vite plugin in `vite.config.ts` patches it to decode the view distance directly (the build fails if the patch stops applying).
 
 ## Terrain, rivers and water
 

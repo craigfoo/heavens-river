@@ -22,6 +22,7 @@ export interface Settings {
   showDebug: boolean;
   grass: boolean;
   shadows: boolean;
+  ao: boolean; // screen-space ambient occlusion
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -46,6 +47,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showDebug: false,
   grass: true,
   shadows: true,
+  ao: true,
 };
 
 export function loadSettings(raw: unknown): Settings {

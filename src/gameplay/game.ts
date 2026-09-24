@@ -24,6 +24,9 @@ import type { TownSite } from '../world/gen/settlements';
 import { quinlanNumber } from '../world/gen/names';
 import { L, SECTION_COUNT } from '../config';
 
+/** Ambient occlusion sample quality per graphics preset. */
+const AO_QUALITY = { low: 'Performance', medium: 'Low', high: 'Medium' } as const;
+
 export type GameState = 'boot' | 'intro' | 'explore' | 'map' | 'menu' | 'journal' | 'cutscene' | 'barge' | 'photo';
 
 export class Game {
@@ -582,6 +585,10 @@ export class Game {
         break;
       case 'quality':
         app.setQuality(s.quality);
+        app.pipeline.setAO(s.ao, AO_QUALITY[s.quality]);
+        break;
+      case 'ao':
+        app.pipeline.setAO(s.ao, AO_QUALITY[s.quality]);
         break;
       case 'adaptiveRes':
         app.adaptiveRes = s.adaptiveRes;
