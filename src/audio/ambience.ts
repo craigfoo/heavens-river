@@ -13,12 +13,16 @@
 import { AMBIENT_RESERVE, PoissonClock, bq, bubble, gn, loopSource, poisson, type Kit } from './synth';
 import { SmoothParam, clamp01, expLerp, rand, smoothstep } from './util';
 
-/** Level trims (linear), calibrated by measuring RMS in a headless browser. */
+/**
+ * Level trims (linear), calibrated by measuring in a headless browser. Keep
+ * the river a soft background: A-weighted, standing at the water's edge it
+ * sits about 10 dB under a town's singing, and it has faded out ~60 m away.
+ */
 const LVL = {
-  rush: 0.6,
-  body: 0.5,
-  lap: 1.4,
-  plip: 0.05,
+  rush: 0.12,
+  body: 0.15,
+  lap: 0.42,
+  plip: 0.025,
   wind: 0.6,
   whistle: 0.5,
   buffet: 0.6,
@@ -91,11 +95,12 @@ export class RiverLayer {
     if (Math.abs(this.wander - this.wanderTarget) < 0.02) this.wanderTarget = Math.random();
     if (ctl) {
       const rush = smoothstep(0.05, 2.5, speed);
-      this.rush.set(Math.pow(prox, 1.6) * (0.2 + 0.8 * rush) * (0.85 + 0.3 * this.wander) * LVL.rush, now);
+      // a soft background: it falls away quickly as you walk off from the water
+      this.rush.set(prox * prox * (0.2 + 0.8 * rush) * (0.85 + 0.3 * this.wander) * LVL.rush, now);
       this.rushTone.set(expLerp(1400, 6000, this.bright * 0.8 + this.wander * 0.2), now);
       // the roar only where the water is really moving (rapids, fast streams)
-      this.body.set(Math.pow(prox, 1.3) * smoothstep(1.8, 4.5, speed) * LVL.body, now);
-      this.lapLevel.set(prox * prox * (1 - 0.5 * rush) * LVL.lap, now);
+      this.body.set(prox * prox * smoothstep(1.8, 4.5, speed) * LVL.body, now);
+      this.lapLevel.set(Math.pow(prox, 2.5) * (1 - 0.5 * rush) * LVL.lap, now);
     }
     this.schedule(now);
   }

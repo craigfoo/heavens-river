@@ -84,7 +84,8 @@ export class AudioBridge {
       this.t = 0.2;
       const o = app.world.sampleAt(cam.s, cam.z, this.sample);
       const edge = o.edge;
-      this.target.water = o.water > -1e8 && cam.h < o.water + 0.2 ? 1 : 1 - smoothstep(2, o.riverClass === RIVER_MAIN || o.mainEdge < edge + 1 ? 160 : 60, Math.max(0, edge));
+      // water is heard close by: fading out over ~70 m from a main river, ~40 m from streams
+      this.target.water = o.water > -1e8 && cam.h < o.water + 0.2 ? 1 : 1 - smoothstep(1, o.riverClass === RIVER_MAIN || o.mainEdge < edge + 1 ? 70 : 40, Math.max(0, edge));
       const flow = Math.hypot(o.flowS, o.flowZ);
       this.target.speed = flow > 0.01 ? flow : o.mainEdge <= edge + 1 ? 0.9 : 1.6;
       this.target.alt = Math.max(0, cam.h - Math.max(o.baseLevel, o.water > -1e8 ? o.water : o.baseLevel));
