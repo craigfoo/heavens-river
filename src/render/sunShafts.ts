@@ -13,9 +13,18 @@ uniform vec3 tint;
 
 float shaftHash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
+// This pass also guards the HDR frame: a NaN or Inf from any shader (some GPU
+// drivers produce them where others do not) would otherwise be smeared into
+// flickering black blocks by the bloom's mip chain and this ray march.
+vec3 shaftClean(vec3 c) {
+  if (any(isnan(c)) || any(isinf(c))) return vec3(0.0);
+  return clamp(c, vec3(0.0), vec3(512.0));
+}
+
 void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+  vec3 base = shaftClean(inputColor.rgb);
   if (strength < 0.001) {
-    outputColor = inputColor;
+    outputColor = vec4(base, 1.0);
     return;
   }
   vec2 d = sunUv - uv;
@@ -28,18 +37,23 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
     p += stepv;
     vec2 q = clamp(p, vec2(0.001), vec2(0.999));
     float sky = step(0.99999, texture2D(depthBuffer, q).r);
-    vec3 c = texture2D(inputBuffer, q).rgb;
+    vec3 c = shaftClean(texture2D(inputBuffer, q).rgb);
     float b = min(max(max(c.r, c.g), c.b), 6.0);
     acc += sky * b * w;
     w *= 0.955;
   }
   acc /= float(SHAFT_SAMPLES);
   float fall = exp(-dist * 1.6);
-  outputColor = vec4(inputColor.rgb + tint * acc * strength * fall, inputColor.a);
+  outputColor = vec4(base + tint * acc * strength * fall, 1.0);
 }
 `;
 
 export class SunShaftsEffect extends Effect {
+  /** Rays off (the pass still guards the frame), e.g. in Quinlan vision whose composite has no matching depth. */
+  suppressed = false;
+  /** Player / debug switch for the rays themselves. */
+  raysEnabled = true;
+
   constructor() {
     super('SunShaftsEffect', frag, {
       blendFunction: BlendFunction.SET,
@@ -61,7 +75,7 @@ export class SunShaftsEffect extends Effect {
     (this.uniforms.get('sunUv')!.value as Vector2).set(_p.x * 0.5 + 0.5, _p.y * 0.5 + 0.5);
     // fade out as the sun swings behind the camera
     const k = Math.max(0, Math.min(1, (facing - 0.05) / 0.35));
-    this.uniforms.get('strength')!.value = amount * k;
+    this.uniforms.get('strength')!.value = this.suppressed || !this.raysEnabled || !Number.isFinite(_p.x + _p.y) ? 0 : amount * k;
     const t = this.uniforms.get('tint')!.value as Vector3;
     const m = Math.max(tint.r, tint.g, tint.b, 1e-3);
     t.set(tint.r / m, tint.g / m, tint.b / m);

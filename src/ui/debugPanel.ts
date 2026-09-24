@@ -3,6 +3,7 @@
 // bundle for players.
 
 import type GUI from 'lil-gui';
+import { BlendFunction } from 'postprocessing';
 import type { App } from '../app';
 import type { Game } from '../gameplay/game';
 import { U } from '../render/uniforms';
@@ -12,7 +13,7 @@ export class DebugPanel {
   private gui: GUI | null = null;
   private loading = false;
   private game: Game;
-  private stats = { fps: '', draws: '', tris: '', chunks: '', quinlans: '' };
+  private stats = { fps: '', draws: '', tris: '', chunks: '', quinlans: '', resolution: '' };
 
   constructor(game: Game) {
     this.game = game;
@@ -52,6 +53,14 @@ export class DebugPanel {
     world.add(app.bulkheads, 'visible').name('x-ray barrier bulkheads');
 
     const render = gui.addFolder('Rendering');
+    // switches for narrowing down GPU-specific glitches
+    const fx = { bloom: true, godRays: app.pipeline.shafts.raysEnabled, msaa: app.pipeline.composer.multisampling > 0 };
+    render.add(fx, 'bloom').name('bloom on').onChange((v: boolean) => {
+      app.pipeline.bloom.blendMode.blendFunction = v ? BlendFunction.SCREEN : BlendFunction.SKIP;
+    });
+    render.add(fx, 'godRays').name('god rays').onChange((v: boolean) => (app.pipeline.shafts.raysEnabled = v));
+    render.add(fx, 'msaa').name('MSAA').onChange((v: boolean) => (app.pipeline.composer.multisampling = v ? 4 : 0));
+    render.add(app, 'adaptiveRes').name('adaptive resolution');
     render.add(app.pipeline.bloom, 'intensity', 0, 3, 0.01).name('bloom');
     render.add(app.terrain, 'lodK', 0.5, 2.5, 0.05).name('terrain LOD');
     render.add(app.terrain, 'maxLevel', 4, 9, 1).name('max terrain level');
@@ -99,5 +108,7 @@ export class DebugPanel {
     this.stats.tris = `${(info.triangles / 1e6).toFixed(2)} M`;
     this.stats.chunks = `${app.terrain.stats.visible} / ${app.terrain.stats.cached} (${app.terrain.stats.pending} pending)`;
     this.stats.quinlans = `${app.life.stats.drawn} drawn / ${app.life.stats.active} active`;
+    const r = app.pipeline.renderer;
+    this.stats.resolution = `×${r.getPixelRatio().toFixed(2)} (${app.resolutionChanges} changes)`;
   }
 }

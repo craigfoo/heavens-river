@@ -197,8 +197,10 @@ export class App {
     const raw = now - this.last;
     const dt = Math.min(raw / 1000, 0.1);
     this.last = now;
-    this.step(dt);
+    // resize (if at all) before drawing: resizing the canvas clears it, and a
+    // resize after the frame was drawn would present an empty black frame
     this.adaptResolution(raw);
+    this.step(dt);
     requestAnimationFrame(() => this.tick());
   }
 
@@ -210,29 +212,42 @@ export class App {
   private frameN = 0;
   private fastWindows = 0;
 
+  private slowWindows = 0;
+  private resCooldown = 0;
+  /** Resolution steps taken so far (each change reallocates the frame buffers). */
+  resolutionChanges = 0;
+
   private adaptResolution(ms: number) {
     if (!this.adaptiveRes || this.testMode || this.renderOverride || this.simFrozen || document.hidden) return;
     if (ms > 250) return; // tab switches and hitches
     this.frameAcc += ms;
     this.frameN++;
-    if (this.frameAcc < 1500) return;
+    this.resCooldown -= ms;
+    if (this.frameAcc < 2000) return;
     const avg = this.frameAcc / this.frameN;
     this.frameAcc = 0;
     this.frameN = 0;
+    if (this.resCooldown > 0) return;
     const minPr = Math.max(0.6, this.maxPixelRatio * 0.5);
     let pr = this.pixelRatio;
-    if (avg > 24 && pr > minPr) {
-      pr = Math.max(minPr, pr * 0.85);
+    // step down only after two slow windows in a row, step back up only after
+    // sustained headroom, and never change more than once every few seconds
+    if (avg > 26) {
       this.fastWindows = 0;
-    } else if (avg < 17.6 && pr < this.maxPixelRatio) {
-      // only climb back after sustained headroom, to avoid oscillating
-      if (++this.fastWindows >= 3) {
-        pr = Math.min(this.maxPixelRatio, pr * 1.12);
-        this.fastWindows = 0;
-      }
-    } else this.fastWindows = 0;
+      if (++this.slowWindows >= 2 && pr > minPr) pr = Math.max(minPr, pr * 0.8);
+    } else if (avg < 17.4) {
+      this.slowWindows = 0;
+      if (++this.fastWindows >= 4 && pr < this.maxPixelRatio) pr = Math.min(this.maxPixelRatio, pr * 1.15);
+    } else {
+      this.slowWindows = 0;
+      this.fastWindows = 0;
+    }
     if (Math.abs(pr - this.pixelRatio) > 0.01) {
       this.pixelRatio = pr;
+      this.slowWindows = 0;
+      this.fastWindows = 0;
+      this.resCooldown = 6000;
+      this.resolutionChanges++;
       this.pipeline.renderer.setPixelRatio(pr);
       this.resize();
     }

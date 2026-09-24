@@ -51,7 +51,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   }
   c *= mix(vec3(1.0), vec3(1.06, 1.0, 0.92), warmth);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c = mix(vec3(l), c, saturation);
+  c = max(mix(vec3(l), c, saturation), vec3(0.0));
   c = mix(c, fadeColor, fade);
   outputColor = vec4(c, inputColor.a);
 }
@@ -159,8 +159,8 @@ export class Pipeline {
     const on = mode !== 'off';
     this.renderPass.enabled = !on;
     this.vision.enabled = on;
-    // the multi-view composite has no matching depth buffer for the shafts
-    this.shaftsPass.enabled = !on;
+    // the multi-view composite has no matching depth buffer for the rays
+    this.shafts.suppressed = on;
     if (on) this.vision.setMode(mode);
   }
 
