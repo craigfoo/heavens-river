@@ -21,6 +21,8 @@ export const QUAY_CUT = 3;
 export const BANK_CUT = 2.5;
 /** Waterside walls stand this far out in the water, in front of the terrain's slope into the cut. */
 export const WALL_INSET = 1.2;
+/** Canal water drifts along the canal at this speed (m/s), from its upstream mouth to its downstream one. */
+const CANAL_FLOW = 0.3;
 
 export interface CanalDef {
   /** Polyline in town-local (a, c) coordinates. */
@@ -110,44 +112,54 @@ export class TownSite {
     return { a, c: Math.abs(off) - half, side };
   }
 
+  /**
+   * Canals on flat ground loop back to the river so the water flows (spec 8).
+   * A ring leaves the river, runs inland and comes back to it downstream;
+   * cross canals between its arms cut the ring into islands. The ring lies
+   * downstream of the market so its mills stand below the houses. Every
+   * polyline runs with the flow: the ring from its upstream mouth round to
+   * its downstream one, the cross canals from the ring out to the river.
+   */
   private planWaterworks(rng: Rng) {
     if (this.kind === 'hamlet') return;
-    const n = this.kind === 'town' ? rng.int(1, 3) : rng.int(3, 6);
-    const depth = this.depthInland * 0.6;
-    const spacing = (this.halfLen * 1.6) / n;
-    const aStart = -this.halfLen * 0.8 + spacing * 0.5;
-    const lateral: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const a = aStart + i * spacing + rng.range(-0.15, 0.15) * spacing;
-      const len = depth * rng.range(0.55, 1);
-      this.canals.push({
-        pts: [
-          [a, -8],
-          [a + rng.range(-20, 20), len * 0.5],
-          [a + rng.range(-30, 30), len],
-        ],
-        width: this.kind === 'city' ? rng.range(10, 16) : rng.range(7, 11),
-        depth: 2.6,
-      });
-      lateral.push(a);
+    const city = this.kind === 'city';
+    const L = this.halfLen;
+    const D = this.depthInland;
+    const down = this.rv.flow;
+    const width = city ? rng.range(10, 14) : rng.range(7, 10);
+    const aUp = rng.range(0.14, 0.22) * L;
+    const span = Math.min((city ? rng.range(0.5, 0.66) : rng.range(0.26, 0.42)) * L, 0.84 * L - aUp);
+    const top = D * (city ? rng.range(0.4, 0.55) : rng.range(0.34, 0.52));
+    const nCross = city ? Math.max(1, Math.floor(span / rng.range(140, 180))) : span > 150 && rng.chance(0.45) ? 1 : 0;
+    // arm heads along the top of the ring, upstream to downstream
+    const heads: [number, number][] = [];
+    for (let i = 0; i <= nCross + 1; i++) {
+      const t = i / (nCross + 1) + (i > 0 && i <= nCross ? rng.range(-0.08, 0.08) : 0);
+      heads.push([down * (aUp + span * t) + rng.range(-10, 10), top + rng.range(-0.08, 0.08) * top]);
     }
-    // a canal parallel to the river links the inland ends, forming island blocks
-    if (n >= 2 && rng.chance(0.75)) {
-      const cLine = depth * 0.5;
-      this.canals.push({
-        pts: [
-          [lateral[0], cLine],
-          [lateral[n - 1], cLine],
-        ],
-        width: this.kind === 'city' ? 12 : 8,
-        depth: 2.6,
-      });
+    const foot = (h: [number, number]): [number, number] => [h[0] + rng.range(-12, 12), -8];
+    const mid = (h: [number, number], f: [number, number]): [number, number] => [(h[0] + f[0]) / 2 + rng.range(-14, 14), h[1] * rng.range(0.45, 0.55)];
+    const first = heads[0];
+    const last = heads[heads.length - 1];
+    const f0 = foot(first);
+    const f1 = foot(last);
+    const ring: [number, number][] = [f0, mid(first, f0), first];
+    for (let i = 1; i < heads.length; i++) {
+      const p = heads[i - 1];
+      const q = heads[i];
+      ring.push([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2 + rng.range(-12, 12)], q);
     }
-    if (this.kind === 'city') {
-      // harbour basin cut into the bank, well away from the central market
-      const sgn = rng.sign();
+    ring.push(mid(last, f1), f1);
+    this.canals.push({ pts: roundCorners(ring, 16), width, depth: 2.6 });
+    for (let i = 1; i <= nCross; i++) {
+      const h = heads[i];
+      const f = foot(h);
+      this.canals.push({ pts: roundCorners([h, mid(h, f), f], 16), width: width * 0.8, depth: 2.6 });
+    }
+    if (city) {
+      // harbour basin cut into the bank upstream, well away from the central market
       const len = rng.range(160, 240);
-      const a0 = sgn > 0 ? this.halfLen * rng.range(0.3, 0.45) : -this.halfLen * rng.range(0.3, 0.45) - len;
+      const a0 = down < 0 ? L * rng.range(0.3, 0.45) : -L * rng.range(0.3, 0.45) - len;
       this.basins.push({ a0, a1: a0 + len, c0: -12, c1: rng.range(80, 130) });
     }
   }
@@ -161,8 +173,21 @@ const _ret = { a: 0, c: 0, side: 1 as 1 | -1 };
 
 export class TownTerrain {
   readonly site: TownSite;
+  /** Bounds of each canal's reach (its water, cut and walls), for a quick reject. */
+  private boxes: { a0: number; a1: number; c0: number; c1: number }[];
   constructor(site: TownSite) {
     this.site = site;
+    this.boxes = site.canals.map((cn) => {
+      const m = cn.width * 0.5 + BANK_CUT + 2;
+      const b = { a0: Infinity, a1: -Infinity, c0: Infinity, c1: -Infinity };
+      for (const [a, c] of cn.pts) {
+        b.a0 = Math.min(b.a0, a - m);
+        b.a1 = Math.max(b.a1, a + m);
+        b.c0 = Math.min(b.c0, c - m);
+        b.c1 = Math.max(b.c1, c + m);
+      }
+      return b;
+    });
   }
 
   /** Modify terrain height h at (s, z); updates water/town fields of o. */
@@ -199,13 +224,23 @@ export class TownTerrain {
     }
     // canals and harbour basins (on the town's own bank)
     let wet = false;
+    let nearest = Infinity;
+    let fa = 0;
+    let fc = 0;
     if (onPrimary) {
-      for (const cn of t.canals) {
-        const d = polyDist(cn.pts, a, c);
-        const e = d - cn.width * 0.5;
+      for (let k = 0; k < t.canals.length; k++) {
+        const bx = this.boxes[k];
+        if (a < bx.a0 || a > bx.a1 || c < bx.c0 || c > bx.c1) continue;
+        const cn = t.canals[k];
+        const e = polyNear(cn.pts, a, c) - cn.width * 0.5;
         if (e < BANK_CUT + 1.5) {
           if (e < BANK_CUT && c > -4) out = Math.min(out, t.waterLevel - cn.depth);
           wet = true;
+          if (e < nearest) {
+            nearest = e;
+            fa = _near.ua;
+            fc = _near.uc;
+          }
         }
       }
       for (const b of t.basins) {
@@ -221,14 +256,18 @@ export class TownTerrain {
     if (wet && o.water < t.waterLevel) {
       o.water = t.waterLevel;
       o.riverClass = RIVER_CANAL;
-      o.flowS = 0;
-      o.flowZ = 0;
+      // along the canal (in a harbour basin the water lies still)
+      o.flowS = t.side * fc * CANAL_FLOW;
+      o.flowZ = fa * CANAL_FLOW;
     }
     return out;
   }
 }
 
-function polyDist(pts: [number, number][], x: number, y: number): number {
+const _near = { ua: 0, uc: 0 };
+
+/** Distance from (x, y) to a polyline; leaves the direction of the nearest segment in _near. */
+function polyNear(pts: [number, number][], x: number, y: number): number {
   let best = Infinity;
   for (let i = 0; i < pts.length - 1; i++) {
     const [ax, ay] = pts[i];
@@ -241,9 +280,42 @@ function polyDist(pts: [number, number][], x: number, y: number): number {
     const ex = ax + dx * t - x;
     const ey = ay + dy * t - y;
     const d = ex * ex + ey * ey;
-    if (d < best) best = d;
+    if (d < best) {
+      best = d;
+      const l = Math.sqrt(l2) || 1;
+      _near.ua = dx / l;
+      _near.uc = dy / l;
+    }
   }
   return Math.sqrt(best);
+}
+
+/** Round a polyline's bends with short curves reaching about r along each side. */
+function roundCorners(pts: [number, number][], r: number): [number, number][] {
+  const out: [number, number][] = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i - 1];
+    const q = pts[i];
+    const n = pts[i + 1];
+    const l0 = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+    const l1 = Math.hypot(n[0] - q[0], n[1] - q[1]) || 1;
+    const turn = Math.acos(clamp(((q[0] - p[0]) * (n[0] - q[0]) + (q[1] - p[1]) * (n[1] - q[1])) / (l0 * l1), -1, 1));
+    if (turn < 0.3) {
+      out.push(q);
+      continue;
+    }
+    const k0 = Math.min(r, l0 * 0.45) / l0;
+    const k1 = Math.min(r, l1 * 0.45) / l1;
+    const s0: [number, number] = [q[0] + (p[0] - q[0]) * k0, q[1] + (p[1] - q[1]) * k0];
+    const s1: [number, number] = [q[0] + (n[0] - q[0]) * k1, q[1] + (n[1] - q[1]) * k1];
+    for (let k = 0; k <= 3; k++) {
+      const t = k / 3;
+      const u = 1 - t;
+      out.push([u * u * s0[0] + 2 * u * t * q[0] + t * t * s1[0], u * u * s0[1] + 2 * u * t * q[1] + t * t * s1[1]]);
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
 }
 
 /** Place hamlets, towns and cities along every main river. */

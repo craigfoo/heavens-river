@@ -261,7 +261,7 @@ No town names are used from the book. Towns are generated, but their look follow
 *Water first*
 - Towns grow along the bank, not away from it. The river is the main street.
 - Every waterfront building has a water entrance: stone slipways, underwater doorways, or ladders straight into the river.
-- Canals cut through the neighbourhoods, lined with stone walks; small footbridges arch over them.
+- Canals leave the river and loop back to it so the water flows, lined with stone walks; timber footbridges cross them in towns, stone arches in cities.
 - Public bathing and swimming pools in squares; fountains with water channels in the pavement.
 - Docks, piers and boathouses are the busiest spaces. Barges moor stern-in along long stone quays.
 - Streams are channeled through town in open gutters and stone culverts.

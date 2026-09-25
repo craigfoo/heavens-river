@@ -752,23 +752,77 @@ export function buildUniversity(mb: MeshBuilder, b: Building, ground: Ground, o:
   }
 }
 
-/** Water mill: a house with a big wheel on the canal side. */
+/**
+ * Water mill (spec 7): a two-storey house along a canal wall with its wheel
+ * turning in the canal in front of it, a timber race guiding the water under
+ * the wheel and a sluice gate at the head of the race.
+ */
 export function buildMill(mb: MeshBuilder, b: Building, ground: Ground, o: BuildOpts) {
-  buildHouse(mb, { ...b, kind: 'house', floors: 2 }, ground, o);
+  buildHouse(mb, { ...b, kind: 'house', floors: 2, wet: false }, ground, o);
   const { lo } = footprintGround(b, ground);
   mb.frame(b.a, 0, b.c, b.rot);
-  // wheel toward the canal (front, -z)
-  const r = 2.4;
-  const yc = lo + 0.8;
-  const zc = -b.d / 2 - 0.9;
-  const n = o.detail ? 12 : 6;
+  const water = o.water ?? lo - 2.5;
+  const f = b.flow ?? 1;
+  const beam = TIMBER[1];
+  // the wheel stands in the water beyond the canal wall, its axle through the wall
+  const R = 2.4;
+  const xw = f * b.w * 0.18;
+  const yc = water + 1.9;
+  const zc = -b.d / 2 - 2.0;
+  const zf = zc - 0.5;
+  const zb = zc + 0.5;
+  const n = o.detail ? 16 : 8;
+  const at = (t: number, r: number, z: number): V3 => [xw + Math.cos(t) * r, yc + Math.sin(t) * r, z];
   for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const x0 = Math.cos(a) * r;
-    const y0 = Math.sin(a) * r;
-    mb.box(x0 - 0.12 + b.w * 0.25, yc + y0 - 0.12, zc - 0.5, x0 + 0.12 + b.w * 0.25, yc + y0 + 0.12, zc + 0.5, WOOD, SURF.wood, SURF.wood, 0.3);
+    const t0 = (i / n) * Math.PI * 2;
+    const t1 = ((i + 1) / n) * Math.PI * 2;
+    const ri = R - 0.28;
+    // rims (front and back faces, outer band)
+    mb.quad(at(t0, R, zf), at(t0, ri, zf), at(t1, ri, zf), at(t1, R, zf), WOOD, SURF.wood, 0.3);
+    mb.quad(at(t0, R, zb), at(t1, R, zb), at(t1, ri, zb), at(t0, ri, zb), WOOD, SURF.wood, 0.3);
+    mb.quad(at(t0, R, zf), at(t1, R, zf), at(t1, R, zb), at(t0, R, zb), WOOD, SURF.wood, 0.3);
+    // a paddle at every segment, both faces
+    const p0 = at(t0, R - 0.2, zf);
+    const p1 = at(t0, R + 0.35, zf);
+    const p2 = at(t0, R + 0.35, zb);
+    const p3 = at(t0, R - 0.2, zb);
+    mb.quad(p0, p1, p2, p3, beam, SURF.timber, 0.3);
+    mb.quad(p1, p0, p3, p2, beam, SURF.timber, 0.3);
+    // spokes on alternate segments
+    if (i % 2 === 0) {
+      const w = 0.07;
+      for (const z of [zf - 0.01, zb + 0.01]) {
+        const s0: V3 = [xw - Math.sin(t0) * w, yc + Math.cos(t0) * w, z];
+        const s1: V3 = [xw + Math.sin(t0) * w, yc - Math.cos(t0) * w, z];
+        const s2: V3 = [s1[0] + Math.cos(t0) * ri, s1[1] + Math.sin(t0) * ri, z];
+        const s3: V3 = [s0[0] + Math.cos(t0) * ri, s0[1] + Math.sin(t0) * ri, z];
+        if (z < zc) mb.quad(s1, s0, s3, s2, beam, SURF.timber, 0.3);
+        else mb.quad(s0, s1, s2, s3, beam, SURF.timber, 0.3);
+      }
+    }
   }
-  mb.cylinder(b.w * 0.25, zc, yc - 0.3, yc + 0.3, 0.3, 0.3, 8, TIMBER[0], SURF.timber, 0.3);
+  // hub and axle into the wall
+  mb.box(xw - 0.3, yc - 0.3, zf - 0.1, xw + 0.3, yc + 0.3, zb + 0.1, beam, SURF.timber, SURF.timber, 0.3);
+  mb.box(xw - 0.13, yc - 0.13, zf - 0.3, xw + 0.13, yc + 0.13, -b.d / 2, IRON, SURF.timber, SURF.timber, 0.3);
+  // the race: boards on posts in the water on the canal side of the wheel
+  const zr = zf - 0.3;
+  const xa = xw - f * (R + 1.6);
+  const xb = xw + f * (R + 0.9);
+  mb.box(Math.min(xa, xb), water - 1.2, zr - 0.12, Math.max(xa, xb), water + 0.55, zr, beam, SURF.timber, SURF.timber, 0.2);
+  const nPost = Math.round(Math.abs(xb - xa) / 1.6);
+  for (let i = 0; i <= nPost; i++) {
+    const x = xa + ((xb - xa) * i) / nPost;
+    mb.box(x - 0.1, water - 2.2, zr - 0.32, x + 0.1, water + 0.95, zr - 0.12, beam, SURF.timber, SURF.timber, 0.2);
+  }
+  // the sluice at the head of the race, from the canal wall across to the race:
+  // posts, a raised gate board and a beam to lift it by
+  const xs = xa + f * 0.3;
+  const zw = -b.d / 2 - 1.3;
+  for (const z of [zw - 0.12, zr - 0.22]) mb.box(xs - 0.12, water - 1.8, z - 0.12, xs + 0.12, yc + 1.4, z + 0.12, beam, SURF.timber, SURF.timber, 0.2);
+  mb.box(xs - 0.05, water + 0.35, zr - 0.1, xs + 0.05, water + 1.3, zw, WOOD, SURF.wood, SURF.wood, 0.3);
+  mb.box(xs - 0.12, yc + 1.4, zr - 0.45, xs + 0.12, yc + 1.62, zw, beam, SURF.timber, SURF.timber, 0.2);
+  mb.box(xs - 0.05, water + 1.3, (zw + zr) / 2 - 0.05, xs + 0.05, yc + 1.4, (zw + zr) / 2 + 0.05, IRON, SURF.timber, SURF.timber, 0.3);
+  mb.resetFrame();
 }
 
 /** Boathouse: an open-fronted shed over the water. */

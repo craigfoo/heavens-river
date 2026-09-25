@@ -3,8 +3,9 @@
 
 import { Rng } from '../core/rng';
 import { archOutline, buildBoat, DARK, fanFace, GOLD, PAINT, STONE, TIMBER, WOOD, type Ground } from './kit';
-import type { OBB, P2 } from './geom';
-import type { BankLayout, Bridge, Fountain, Pier, Plaza, Rect, Slipway, Statue, Stall, WallSeg, WaterDoor } from './layout';
+import { pointSegDist, resample, type OBB, type P2 } from './geom';
+import type { CanalDef } from '../world/gen/settlements';
+import type { BankLayout, Bridge, Fountain, Pier, Plaza, Rack, Rect, Slipway, Statue, Stall, WallSeg, WaterDoor } from './layout';
 import { cross, dot, lin, MeshBuilder, sub, SURF, type V3 } from './meshBuilder';
 
 const PAVE = lin('#a89a84');
@@ -237,12 +238,107 @@ export function canalWallLines(pts: P2[], width: number, inset: number, cMin: nu
   return [[...right, ...cap, ...left]];
 }
 
+/**
+ * The waterside walls of a town's canals: each canal's walls, less the
+ * stretches that would stand in another canal's water where two meet.
+ */
+export function canalWalls(canals: CanalDef[], inset: number, cMin: number): P2[][] {
+  const wet = (p: P2, k: number) =>
+    canals.some((o, j) => {
+      if (j === k) return false;
+      const hw = o.width / 2 - inset + 0.05;
+      for (let i = 0; i < o.pts.length - 1; i++) if (pointSegDist(p, o.pts[i], o.pts[i + 1]) < hw) return true;
+      return false;
+    });
+  // where a wall runs into another canal's water: the point on its edge between a dry p and a wet q
+  const edge = (p: P2, q: P2, k: number): P2 => {
+    let lo = p;
+    let hi = q;
+    for (let i = 0; i < 8; i++) {
+      const m: P2 = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2];
+      if (wet(m, k)) hi = m;
+      else lo = m;
+    }
+    return lo;
+  };
+  const out: P2[][] = [];
+  canals.forEach((cn, k) => {
+    for (const line of canalWallLines(cn.pts, cn.width, inset, cMin)) {
+      const pts = resample(line, 1);
+      let run: P2[] = [];
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (!wet(p, k)) {
+          if (!run.length && i > 0) run.push(edge(p, pts[i - 1], k));
+          run.push(p);
+        } else if (run.length) {
+          run.push(edge(run[run.length - 1], p, k));
+          if (run.length > 1) out.push(run);
+          run = [];
+        }
+      }
+      if (run.length > 1) out.push(run);
+    }
+  });
+  return out;
+}
+
 /** Deck profile of a footbridge: base level (the higher bank), half length and rise of the arch. */
 export function bridgeDeck(br: Bridge, ground: Ground): { base: number; hs: number; rise: number } {
   const hs = br.span / 2 + 1.5;
   const ca = Math.cos(br.rot) * hs;
   const cc = Math.sin(br.rot) * hs;
-  return { base: Math.max(ground(br.a - ca, br.c - cc), ground(br.a + ca, br.c + cc)), hs, rise: 1.1 + br.span * 0.04 };
+  return { base: Math.max(ground(br.a - ca, br.c - cc), ground(br.a + ca, br.c + cc)), hs, rise: br.timber ? 0.3 + br.span * 0.02 : 1.1 + br.span * 0.04 };
+}
+
+/**
+ * Timber footbridge (towns, spec 8): a cambered plank deck on stringers,
+ * a trestle standing in the water inside each canal wall, and a rail at
+ * Quinlan height (0.7 m, spec 2).
+ */
+export function buildTimberBridge(mb: MeshBuilder, br: Bridge, ground: Ground, water: number) {
+  mb.frame(br.a, 0, br.c, br.rot);
+  const { base, hs, rise } = bridgeDeck(br, ground);
+  const hw = br.width / 2;
+  const y = (x: number) => base + rise * (1 - (x / hs) ** 2) + 0.2;
+  const plank = WOOD;
+  const beam = TIMBER[1];
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const x0 = -hs + (2 * hs * i) / n;
+    const x1 = -hs + (2 * hs * (i + 1)) / n;
+    const y0 = y(x0);
+    const y1 = y(x1);
+    mb.quad([x1, y1, -hw], [x0, y0, -hw], [x0, y0, hw], [x1, y1, hw], plank, SURF.wood, 0.3);
+    // stringers down the sides and under the deck
+    mb.quad([x1, y1 - 0.4, -hw], [x0, y0 - 0.4, -hw], [x0, y0, -hw], [x1, y1, -hw], beam, SURF.timber, 0.2);
+    mb.quad([x0, y0 - 0.4, hw], [x1, y1 - 0.4, hw], [x1, y1, hw], [x0, y0, hw], beam, SURF.timber, 0.2);
+    mb.quad([x0, y0 - 0.4, -hw], [x1, y1 - 0.4, -hw], [x1, y1 - 0.4, hw], [x0, y0 - 0.4, hw], beam, SURF.timber, 0.2);
+  }
+  // a trestle in the water just inside each canal wall
+  for (const sx of [-1, 1]) {
+    const x = sx * (br.span / 2 - 2.3);
+    const top = y(x) - 0.4;
+    for (const z of [-hw + 0.25, hw - 0.25]) mb.box(x - 0.14, water - 2.6, z - 0.14, x + 0.14, top, z + 0.14, beam, SURF.timber, SURF.timber, 0.2);
+    mb.box(x - 0.1, top - 0.35, -hw, x + 0.1, top, hw, beam, SURF.timber, SURF.timber, 0.2);
+    mb.box(x - 0.08, water + 0.5, -hw + 0.25, x + 0.08, water + 0.72, hw - 0.25, beam, SURF.timber, SURF.timber, 0.2);
+  }
+  // rails: posts and a top rail following the camber
+  const nPost = Math.max(3, Math.round((2 * hs) / 1.6));
+  for (const z of [-hw + 0.07, hw - 0.07]) {
+    for (let i = 0; i <= nPost; i++) {
+      const x = -hs + 0.1 + ((2 * hs - 0.2) * i) / nPost;
+      mb.box(x - 0.06, y(x) - 0.05, z - 0.06, x + 0.06, y(x) + 0.7, z + 0.06, beam, SURF.timber, SURF.timber, 0.2);
+      if (i === nPost) continue;
+      const xn = -hs + 0.1 + ((2 * hs - 0.2) * (i + 1)) / nPost;
+      const ya = y(x) + 0.62;
+      const yb = y(xn) + 0.62;
+      mb.quad([xn, yb, z - 0.05], [x, ya, z - 0.05], [x, ya + 0.1, z - 0.05], [xn, yb + 0.1, z - 0.05], plank, SURF.wood, 0.3);
+      mb.quad([x, ya, z + 0.05], [xn, yb, z + 0.05], [xn, yb + 0.1, z + 0.05], [x, ya + 0.1, z + 0.05], plank, SURF.wood, 0.3);
+      mb.quad([x, ya + 0.1, z + 0.05], [xn, yb + 0.1, z + 0.05], [xn, yb + 0.1, z - 0.05], [x, ya + 0.1, z - 0.05], plank, SURF.wood, 0.3);
+    }
+  }
+  mb.resetFrame();
 }
 
 /** Arched stone footbridge (over a canal), spanning along its rotation. */
@@ -487,7 +583,11 @@ export function buildStall(mb: MeshBuilder, s: Stall, ground: Ground) {
   mb.resetFrame();
 }
 
-export function buildRack(mb: MeshBuilder, r: { a: number; c: number; rot: number }, ground: Ground) {
+/** Undyed and dyed cloth on the drying racks. */
+const CLOTH = [lin('#e0d6bc'), lin('#d8ccb0'), lin('#b8483a'), lin('#3a6a9a'), lin('#c89a3a'), lin('#6a8a4a')];
+
+/** A fish rack (fish hung to dry by the water) or a drying rack for cloth (spec 8). */
+export function buildRack(mb: MeshBuilder, r: Rack, ground: Ground) {
   const base = ground(r.a, r.c);
   mb.frame(r.a, 0, r.c, r.rot);
   for (const x of [-1.5, 1.5]) {
@@ -495,7 +595,29 @@ export function buildRack(mb: MeshBuilder, r: { a: number; c: number; rot: numbe
     mb.box(x - 0.06, base, 0.4, x + 0.06, base + 1.8, 0.5, TIMBER[1], SURF.timber, SURF.timber, 0.2);
   }
   mb.box(-1.6, base + 1.7, -0.05, 1.6, base + 1.8, 0.05, TIMBER[1], SURF.timber, SURF.timber, 0.2);
-  for (let i = 0; i < 7; i++) mb.ellipsoid(-1.3 + i * 0.43, base + 1.35, 0, 0.07, 0.28, 0.03, 6, lin('#9a9a8a'), SURF.plain, 0.2);
+  if (r.kind === 'fish') {
+    for (let i = 0; i < 7; i++) mb.ellipsoid(-1.3 + i * 0.43, base + 1.35, 0, 0.07, 0.28, 0.03, 6, lin('#9a9a8a'), SURF.plain, 0.2);
+  } else {
+    // two or three lengths of cloth over the bar, stirring a little
+    const k = Math.floor(Math.abs(r.a * 3.7 + r.c * 1.3));
+    const n = 2 + (k % 2);
+    for (let i = 0; i < n; i++) {
+      const w = 2.9 / n - 0.12;
+      const x0 = -1.45 + i * (2.9 / n) + 0.06;
+      const drop = 0.75 + ((k >> (i + 1)) % 3) * 0.12;
+      const col = CLOTH[(k + i * 5) % CLOTH.length];
+      const sway = 0.06 * (i % 2 ? 1 : -1);
+      for (const z of [-0.03, 0.03]) {
+        const f = z < 0 ? 1 : -1;
+        const p0: V3 = [x0, base + 1.72 - drop, z + sway];
+        const p1: V3 = [x0 + w, base + 1.72 - drop, z + sway];
+        const p2: V3 = [x0 + w, base + 1.72, z];
+        const p3: V3 = [x0, base + 1.72, z];
+        if (f > 0) mb.quad(p1, p0, p3, p2, col, SURF.cloth, 0.4);
+        else mb.quad(p0, p1, p2, p3, col, SURF.cloth, 0.4);
+      }
+    }
+  }
   mb.resetFrame();
 }
 

@@ -18,8 +18,9 @@ import {
   buildSlipway,
   buildWaterDoor,
   buildWaterWall,
-  canalWallLines,
+  canalWalls,
   buildFootBridge,
+  buildTimberBridge,
   buildFountain,
   buildGarden,
   buildPier,
@@ -550,13 +551,10 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     }
     // ---- canals, bridges
     if (B.side === site.side) {
-      for (const cn of site.canals) {
-        const a = cn.pts[0][0];
-        for (const wall of canalWallLines(cn.pts, cn.width, WALL_INSET, -WALL_INSET)) {
-          const line = resample(wall, 4);
-          both(a, (mb) => buildWaterWall(mb, line, ground, water));
-          bankFloors(line);
-        }
+      for (const wall of canalWalls(site.canals, WALL_INSET, -WALL_INSET)) {
+        const line = resample(wall, 4);
+        both(line[0][0], (mb) => buildWaterWall(mb, line, ground, water));
+        bankFloors(line);
       }
     }
     // ---- slipways, water stairs and underwater doors (the wet threshold, spec 3)
@@ -571,9 +569,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     for (const wd of B.waterDoors) nearOnly(wd.a, (mb) => buildWaterDoor(mb, wd, water, PAINT[Math.floor(Math.abs(wd.a * 7.3)) % PAINT.length]));
 
     for (const br of B.bridges) {
-      both(br.a, (mb) => {
-        buildFootBridge(mb, br, ground, water);
-      });
+      both(br.a, (mb) => (br.timber ? buildTimberBridge(mb, br, ground, water) : buildFootBridge(mb, br, ground, water)));
       // bridge deck floor as arched segments, and a waypoint on its crown
       const { base, hs, rise } = bridgeDeck(br, ground);
       const ux = Math.cos(br.rot);

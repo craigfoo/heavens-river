@@ -8,10 +8,11 @@
 // paths link the commons, lanes ring each common and radiate from it, and
 // every house faces the path it stands on.
 
+import { smoothstep } from '../core/math';
 import { Rng, seedFor } from '../core/rng';
 import { WALL_INSET, type CanalDef, type TownSite } from '../world/gen/settlements';
 import { frontDoorX } from './kit';
-import { canalWallLines } from './props';
+import { canalWalls } from './props';
 import { Hash2, obbCorners, obbOverlap, obbRadius, pointSegDist, polyLength, resample, segCross, segObbDist, smooth, type OBB, type P2 } from './geom';
 
 export type District = 'waterfront' | 'market' | 'craft' | 'residential' | 'civic' | 'university' | 'mill' | 'edge';
@@ -69,6 +70,8 @@ export interface Building {
   lookout: boolean;
   /** Faces water across the quay or a canal walk: it gets a drip porch (spec 3). */
   wet: boolean;
+  /** Mills: the canal runs past the wheel toward local +x (1) or -x (-1). */
+  flow?: 1 | -1;
 }
 
 /** Placeholder parameters, set properly by `dress` once a bank is laid out. */
@@ -119,6 +122,8 @@ export interface Bridge {
   rot: number;
   span: number;
   width: number;
+  /** Timber in towns, arched stone in cities (spec 8). */
+  timber?: boolean;
 }
 
 /**
@@ -180,6 +185,13 @@ export interface Tree {
   type: number;
 }
 
+export interface Rack {
+  a: number;
+  c: number;
+  rot: number;
+  kind: 'fish' | 'cloth';
+}
+
 export interface Mooring {
   a: number;
   c: number;
@@ -212,7 +224,8 @@ export interface BankLayout {
   trees: Tree[];
   moorings: Mooring[];
   walls: WallSeg[];
-  racks: { a: number; c: number; rot: number }[];
+  /** Fish racks by the water, drying racks for cloth on the inland edge (spec 8). */
+  racks: Rack[];
   slips: Slipway[];
   waterDoors: WaterDoor[];
   /** Vegetable plots behind houses. */
@@ -685,7 +698,7 @@ const ROOFS_CITY: RoofKind[] = ['tile', 'tile', 'tile', 'slate', 'slate', 'shing
  * What to build at a spot, from the building catalogue (spec 7; sizes are
  * frontage x depth). `core`: the packed, cobbled old town.
  */
-function specFor(rng: Rng, district: District, waterfront: boolean, city: boolean, core: boolean, n: Counters): Spec {
+function specFor(rng: Rng, district: District, waterfront: boolean, city: boolean, core: boolean, n: Counters, loud = false): Spec {
   const roofs = city ? ROOFS_CITY : ROOFS_TOWN;
   const mk = (kind: BuildingKind, w: number, d: number, floors: number, roof: RoofKind = rng.pick(roofs), mural = false, tower = false): Spec => ({
     ...UNDRESSED,
@@ -709,13 +722,14 @@ function specFor(rng: Rng, district: District, waterfront: boolean, city: boolea
   if (waterfront) {
     const r = rng.next();
     if (r < (city ? 0.4 : 0.3)) s = mk('warehouse', rng.range(22, 27), rng.range(11, 13), 2, 'tile', rng.chance(0.75));
-    else if (r < (city ? 0.52 : 0.45) && n.tavern < maxTav) s = tavern();
+    else if (r < (city ? 0.52 : 0.45) && loud && n.tavern < maxTav) s = tavern();
     else s = rng.chance(0.5) ? townhouse() : house();
   } else if (district === 'market') {
     const r = rng.next();
     s = r < 0.2 && n.tavern < maxTav ? tavern() : r < 0.75 ? townhouse('shop') : townhouse();
-  } else if (district === 'craft') {
-    s = rng.chance(0.7) ? mk('workshop', rng.range(8, 10), rng.range(6, 7), 1, rng.chance(0.5) ? 'shingle' : 'tile') : house();
+  } else if (district === 'craft' || district === 'mill') {
+    // workshops and smithies, downstream of the houses (spec 8)
+    s = rng.chance(district === 'craft' ? 0.7 : 0.45) ? mk('workshop', rng.range(8, 10), rng.range(6, 7), 1, rng.chance(0.5) ? 'shingle' : 'tile') : rng.chance(0.5) ? cottage() : house();
   } else if (district === 'university') {
     s = mk('university', rng.range(20, 30), 16, 3, 'slate', true);
   } else if (district === 'edge') {
@@ -930,7 +944,9 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   const canals = primary ? site.canals : [];
   const water = new Water(canals, B.basins);
   const P = new Plan(B, L, D, quayW, water, Math.min(city ? 130 : 100, D * 0.4));
-  const mainW = city ? 3.4 : 3.0;
+  // foot traffic only: no carts (spec 2)
+  const mainW = city ? 4.2 : 3.6;
+  const down = site.riverRef.flow;
 
   // ---- the market square, opening onto the quay by the main dock
   const Rm = city ? 40 : 26;
@@ -1003,6 +1019,59 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   const hallOk = P.fits(obbOf(hall));
   if (hallOk) P.reserved.push(obbOf(hall));
 
+  // ---- water mills on the arms that carry the canals' water back out to the
+  // river, below the town (spec 7, 8): the long side on the canal wall, the
+  // wheel turning in the water in front of it
+  const mills: Building[] = [];
+  canals.forEach((cn, k) => {
+    if (mills.length >= (city ? 2 : 1)) return;
+    const pts = resample(cn.pts, 3);
+    // the ring's outflow is its tail from the last bend down; a cross canal is all outflow
+    let i0 = 0;
+    if (k === 0) {
+      i0 = pts.length - 1;
+      while (i0 > 0 && pts[i0 - 1][1] > pts[i0][1] + 1.5) i0--;
+    }
+    const cTop = pts[i0][1];
+    const order: number[] = [];
+    for (let i = i0 + 1; i < pts.length - 1; i += 2) if (pts[i][1] > quayW + 24 && pts[i][1] < cTop - 22) order.push(i);
+    order.sort((x, y) => Math.abs(pts[x][1] - (quayW + cTop) / 2) - Math.abs(pts[y][1] - (quayW + cTop) / 2));
+    for (const i of order) {
+      const p = pts[i];
+      const l = Math.hypot(pts[i + 1][0] - pts[i - 1][0], pts[i + 1][1] - pts[i - 1][1]) || 1;
+      const u: P2 = [(pts[i + 1][0] - pts[i - 1][0]) / l, (pts[i + 1][1] - pts[i - 1][1]) / l];
+      for (const sd of rng.chance(0.5) ? ([1, -1] as const) : ([-1, 1] as const)) {
+        const n: P2 = [-u[1] * sd, u[0] * sd];
+        const off = cn.width / 2 + 0.1 + 4;
+        const m: Building = {
+          ...UNDRESSED,
+          a: p[0] + n[0] * off,
+          c: p[1] + n[1] * off,
+          w: 12,
+          d: 8,
+          rot: Math.atan2(-n[0], n[1]),
+          floors: 2,
+          kind: 'mill',
+          roof: rng.chance(0.5) ? 'shingle' : 'tile',
+          district: 'mill',
+          seed: rng.int(0, 1e9),
+          mural: false,
+          waterDoor: false,
+          sunken: false,
+          tower: false,
+          flow: sd,
+        };
+        // clear of other water behind its canal front, and of the market and hall
+        const back: OBB = { a: m.a + n[0] * 0.8, c: m.c + n[1] * 0.8, hw: 6, hd: 3.2, rot: m.rot };
+        if (!P.fits(obbOf(m), 0.25, 0.5, 0) || water.near(back, 1)) continue;
+        if (Math.hypot(m.a - mA, m.c - mC) < ra + 40) continue;
+        P.reserved.push(obbOf(m));
+        mills.push(m);
+        return;
+      }
+    }
+  });
+
   // ---- the amphitheatre (cities) sits on the waterfront with the river
   // behind its stage (spec 7)
   const cents: Centre[] = [M];
@@ -1033,7 +1102,7 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     const c = rng.range(quayW + sp * 0.38, D - sp * 0.3);
     if (!P.inBounds(a, c, sp * 0.3) || water.gap(a, c) < 20) continue;
     if (cents.some((q) => Math.hypot(q.a - a, q.c - c) < (q.w + sp / 2) * 0.95)) continue;
-    if (hallOk && obbPointDist(obbOf(hall), a, c) < 30) continue;
+    if (P.reserved.some((r) => obbPointDist(r, a, c) < 30)) continue;
     cents.push(commons(rng, a, c, sp / 2, city ? rng.range(7.5, 12) : rng.range(6.5, 10.5), 'commons', 'commons'));
   }
   // the university takes over one quarter (cities)
@@ -1047,9 +1116,11 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     }
   }
   const cobbleR = city ? 320 : 240;
+  // workshops and smithies gather downstream of the houses (spec 8)
+  const craftP = (a: number) => 0.04 + 0.52 * smoothstep(-0.15, 0.55, (a * down) / L);
   for (const q of cents) {
     if (q.kind !== 'market') P.addPlaza(q.plaza);
-    if (q.kind === 'commons') q.district = q.c > D - 80 || Math.abs(q.a) > L - 70 ? 'edge' : rng.chance(0.28) ? 'craft' : 'residential';
+    if (q.kind === 'commons') q.district = q.c > D - 80 || Math.abs(q.a) > L - 70 ? 'edge' : rng.chance(craftP(q.a)) ? 'craft' : 'residential';
     q.paving = Math.hypot(q.a - mA, q.c - mC) < cobbleR ? 'cobble' : 'earth';
     if (q.kind === 'commons' && q.paving === 'earth') q.plaza.kind = 'green';
   }
@@ -1069,6 +1140,12 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     if (best < 0 || bd * 92 > 150) for (let i = 0; i < cents.length; i++) scan(i);
     return best;
   };
+
+  // the neighbourhood round each mill is its quarter
+  for (const m of mills) {
+    const q = cents[owner(m.a, m.c)];
+    if (q.kind === 'commons' && q.district !== 'edge') q.district = 'mill';
+  }
 
   // ---- winding paths between the centres: a spanning tree plus some loops
   const link = (A: Centre, C: Centre, width: number): boolean => {
@@ -1155,7 +1232,14 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   const walkW = 2.8;
   const walkRuns = (pts: P2[], w: number) => {
     const s = resample(pts, 3).map((p): P2 | null =>
-      Math.abs(p[0]) < L - 3 && p[1] > quayW - 1 && P.inBounds(p[0], p[1], 5) && water.gap(p[0], p[1]) > w / 2 + 0.6 && P.plazaGap(p[0], p[1]) > w / 2 + 0.8 ? p : null,
+      Math.abs(p[0]) < L - 3 &&
+      p[1] > quayW - 1 &&
+      P.inBounds(p[0], p[1], 5) &&
+      water.gap(p[0], p[1]) > w / 2 + 0.6 &&
+      P.plazaGap(p[0], p[1]) > w / 2 + 0.8 &&
+      !P.reserved.some((r) => obbPointDist(r, p[0], p[1]) < w / 2 + 0.6)
+        ? p
+        : null,
     );
     for (const run of runsOf(s, false)) if (polyLength(run) > 12) P.addPath({ pts: run, width: w, kind: 'canalwalk', paving: 'stone' });
   };
@@ -1184,11 +1268,28 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     }
   }
 
+  // the walks along the ring cross the mouths of its cross canals on bridges
+  for (const cn of canals.slice(1)) {
+    const ring = canals[0];
+    for (const sgn of [-1, 1]) {
+      const line = offsetLine(ring.pts, sgn * (ring.width / 2 + 2.3));
+      for (let i = 0; i < line.length - 1; i++)
+        for (let j = 0; j < cn.pts.length - 1; j++) {
+          const t = segCross(cn.pts[j], cn.pts[j + 1], line[i], line[i + 1]);
+          if (t < 0) continue;
+          const q0 = cn.pts[j];
+          const q1 = cn.pts[j + 1];
+          const l = Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) || 1;
+          B.bridges.push({ a: q0[0] + (q1[0] - q0[0]) * t, c: q0[1] + (q1[1] - q0[1]) * t, rot: Math.atan2(-(q1[0] - q0[0]) / l, (q1[1] - q0[1]) / l), span: cn.width + 1, width: walkW + 0.2 });
+        }
+    }
+  }
+
   // ---- lanes: partial rings around each centre and spokes out from it
   for (let i = 0; i < cents.length; i++) {
     const q = cents[i];
     if (q.kind === 'amph') continue;
-    const laneW = rng.range(2.2, 2.8);
+    const laneW = rng.range(2.5, 3.2);
     const hw = laneW / 2;
     const paving = q.paving;
     const laneOk = (p: P2, t: P2, strict: boolean) =>
@@ -1318,42 +1419,19 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     P.reserved.length = 0;
     P.addBuilding(hall);
   }
-  // mills where canals end inland
-  for (const cn of canals) {
-    if (cn.pts.length < 3) continue;
-    const last = cn.pts[cn.pts.length - 1];
-    const prev = cn.pts[cn.pts.length - 2];
-    const l = Math.hypot(last[0] - prev[0], last[1] - prev[1]) || 1;
-    const u: P2 = [(last[0] - prev[0]) / l, (last[1] - prev[1]) / l];
-    const m: Building = {
-      a: last[0] + u[0] * 7.5,
-      c: last[1] + u[1] * 7.5,
-      w: 12,
-      d: 11,
-      rot: Math.atan2(-u[0], u[1]),
-      floors: 2,
-      kind: 'mill',
-      roof: 'shingle',
-      district: 'mill',
-      seed: rng.int(0, 1e9),
-      mural: false,
-      waterDoor: true,
-      sunken: false,
-      tower: false,
-      ...UNDRESSED,
-      wet: true,
-    };
-    if (P.fits(obbOf(m), 0.25, 0.3, 0)) P.addBuilding(m);
-  }
+  for (const m of mills) P.addBuilding(m);
+  // loud uses (taverns) keep near the market (spec 8)
+  const loudR = city ? 260 : 160;
   const pickAt = (set: 'water' | 'path') => (a: number, c: number) => {
     const q = cents[owner(a, c)];
-    return set === 'water' ? specFor(rng, 'waterfront', true, city, q.paving === 'cobble', n) : specFor(rng, q.district, false, city, q.paving === 'cobble', n);
+    const loud = Math.hypot(a - mA, c - mC) < loudR;
+    return set === 'water' ? specFor(rng, 'waterfront', true, city, q.paving === 'cobble', n, loud) : specFor(rng, q.district, false, city, q.paving === 'cobble', n, loud);
   };
   const yard = (b: Building) => gardenBehind(P, rng, b, b.district === 'edge' ? 0.35 : b.district === 'residential' ? 0.2 : 0.08);
   // terraces in the old core, detached houses with yards further out
   const spacing = (tight: [number, number], loose: [number, number]) => (a: number, c: number) => (cents[owner(a, c)].paving === 'cobble' ? tight : loose);
   // round the market, then the university quad, then along the main paths
-  lineUp(P, rng, [...mRimPts, mRimPts[0]], 0, -1, () => specFor(rng, 'market', false, city, true, n), { set: [0.8, 1.6], gap: [0.2, 0.8] });
+  lineUp(P, rng, [...mRimPts, mRimPts[0]], 0, -1, () => specFor(rng, 'market', false, city, true, n, true), { set: [0.8, 1.6], gap: [0.2, 0.8] });
   for (const q of cents) if (q.kind === 'quad') lineUp(P, rng, [...q.plaza.rim, q.plaza.rim[0]], 0, -1, () => specFor(rng, 'university', false, city, true, n), { set: [1, 2], gap: [1, 4] });
   const mains = B.paths.filter((p) => p.kind === 'main');
   const walks = B.paths.filter((p) => p.kind === 'canalwalk');
@@ -1483,6 +1561,25 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   // ---- ways down into the water (spec 3 and 8)
   placeSlipways(B, site, rng, water, canals, quayW);
 
+  // ---- crossings: timber footbridges in towns, arched stone in cities (spec 8)
+  if (!city) for (const br of B.bridges) br.timber = true;
+
+  // ---- fish racks on the bank past the town's ends, drying racks for cloth
+  // along its inland edge (spec 8; own random stream)
+  const rrng = new Rng(seedFor(site.seed, `racks${side}`));
+  for (const e of [-1, 1]) {
+    let a = e * (L + (city ? 24 : 10));
+    for (let k = rrng.int(2, 6); k > 0; k--, a += e * rrng.range(5, 9)) B.racks.push({ a, c: rrng.range(6.5, 9.5), rot: rrng.range(-0.25, 0.25), kind: 'fish' });
+  }
+  for (let k = 0, left = city ? rrng.int(10, 20) : rrng.int(5, 11); k < 400 && left > 0; k++) {
+    const r: Rack = { a: rrng.range(-L + 20, L - 20), c: rrng.range(D - 50, D - 12), rot: rrng.range(0, Math.PI), kind: 'cloth' };
+    const o: OBB = { a: r.a, c: r.c, hw: 1.9, hd: 0.8, rot: r.rot };
+    if (!P.fits(o, 0.6, 0.8) || P.keep.some((q) => Math.hypot(q.a - r.a, q.c - r.c) < q.r + 2)) continue;
+    B.racks.push(r);
+    P.addObstacle(o);
+    left--;
+  }
+
   // ---- trees in the yards and verges
   yardTrees(P, trng, quayW + 3, 11, city ? 0.6 : 0.66);
   dress(B, site.kind, [mA, quayW], Math.max(L * 0.7, D), site.seed);
@@ -1511,7 +1608,7 @@ function placeSlipways(B: BankLayout, site: TownSite, rng: Rng, water: Water, ca
   };
   const quay = mkRun(resample([[-L, -WALL_INSET], [L, -WALL_INSET]], 2), true);
   const runs: Run[] = [quay];
-  for (const cn of canals) for (const wall of canalWallLines(cn.pts, cn.width, WALL_INSET, -WALL_INSET)) runs.push(mkRun(resample(wall, 2), false));
+  for (const wall of canalWalls(canals, WALL_INSET, -WALL_INSET)) runs.push(mkRun(resample(wall, 2), false));
   const at = (R: Run, s: number): { p: P2; u: P2 } => {
     let i = 1;
     while (i < R.cum.length - 1 && R.cum[i] < s) i++;
@@ -1525,7 +1622,8 @@ function placeSlipways(B: BankLayout, site: TownSite, rng: Rng, water: Water, ca
   const outOf = (R: Run, u: P2): P2 => (R.quay ? [0, -1] : [-u[1], u[0]]);
   const blocked = (R: Run, p: P2) =>
     (R.quay ? water.gap(p[0], quayW * 0.5) < 1.5 || B.piers.some((q) => Math.abs(q.a - p[0]) < q.width / 2 + 2) : p[1] < quayW + 4) ||
-    B.bridges.some((br) => Math.hypot(p[0] - br.a, p[1] - br.c) < br.span / 2 + br.width / 2 + 3);
+    B.bridges.some((br) => Math.hypot(p[0] - br.a, p[1] - br.c) < br.span / 2 + br.width / 2 + 3) ||
+    B.buildings.some((b) => b.kind === 'mill' && Math.hypot(p[0] - b.a, p[1] - b.c) < 14);
   const free = (R: Run, s0: number, s1: number, pad: number) => !R.taken.some(([t0, t1]) => s1 > t0 - pad && s0 < t1 + pad);
   const slip = (R: Run, s: number, width: number, steps: boolean): boolean => {
     for (const dir of rng.chance(0.5) ? [1, -1] : [-1, 1]) {
@@ -1605,7 +1703,7 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
   B.dock = { a: B.piers[0]?.a ?? 0, c: 0 };
   // fishing racks near the water
   for (let i = rng.int(2, 7); i > 0; i--) {
-    const r = { a: rng.range(-L + 5, L - 5), c: 3.3, rot: rng.range(-0.3, 0.3) };
+    const r: Rack = { a: rng.range(-L + 5, L - 5), c: 3.3, rot: rng.range(-0.3, 0.3), kind: 'fish' };
     B.racks.push(r);
     P.keep.push({ a: r.a, c: r.c, r: 2.4 });
   }
@@ -1615,7 +1713,7 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
   for (let a = -L - 6; a < L + 6; a += rng.range(22, 34)) ctrl.push([a, rng.range(7.5, 10.5)]);
   ctrl.push([L + 6, rng.range(7.5, 10.5)]);
   const bank = resample(smooth(ctrl, 6), 3);
-  P.addPath({ pts: bank, width: 2.6, kind: 'track', paving: 'earth' });
+  P.addPath({ pts: bank, width: 2.8, kind: 'track', paving: 'earth' });
   const bankC = (a: number) => bank.reduce((best, p) => (Math.abs(p[0] - a) < Math.abs(best[0] - a) ? p : best))[1];
   B.signpost = { a: B.dock.a + 5, c: bankC(B.dock.a + 5) + 2.6 };
   P.keep.push({ a: B.signpost.a, c: B.signpost.c, r: 2.4 }, { a: B.dock.a + 8, c: 10, r: 3.5 });
@@ -1627,7 +1725,7 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
   P.addPlaza(G.plaza);
   B.statues.push({ a: gA, c: gC, rot: Math.PI, kind: rng.pick(['otter', 'fish', 'flow', 'quinlan'] as const), scale: 1, seed: rng.int(0, 1e9), plinth: 0.9 });
   B.spot = { a: gA, c: gC - G.plaza.r * 0.6 };
-  const laneW = 2.2;
+  const laneW = 2.5;
   const toBank = route(P, rng, [gA, gC - G.rim(-Math.PI / 2) + 1], [B.dock.a + rng.range(-6, 6), bankC(B.dock.a) + 0.5], laneW, 0.12);
   if (toBank) {
     P.addPath({ pts: toBank.pieces[0], width: laneW, kind: 'track', paving: 'earth' });
