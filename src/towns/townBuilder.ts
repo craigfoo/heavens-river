@@ -6,18 +6,22 @@
 import { wrapS } from '../coords/cylinder';
 import { Rng, seedFor } from '../core/rng';
 import { newSample, type WorldGen } from '../world/gen/world';
-import type { TownSite } from '../world/gen/settlements';
+import { BANK_CUT, QUAY_CUT, type TownSite } from '../world/gen/settlements';
 import { buildBoathouse, buildBurrow, buildCivic, buildHouse, buildMill, buildTower, buildUniversity, FLOOR_H, type Ground } from './kit';
-import { generateTownLayout, type TownLayout } from './layout';
+import { pointSegDist, resample, type P2 } from './geom';
+import { generateTownLayout, type Path, type TownLayout } from './layout';
 import { MeshBuilder, SURF, lin } from './meshBuilder';
 import {
+  bridgeDeck,
   buildAmphitheater,
   buildBarge,
-  buildCanalWalls,
+  buildWaterWall,
+  canalWallLine,
   buildFootBridge,
   buildFountain,
   buildGarden,
   buildPier,
+  buildPlaza,
   buildPool,
   buildRack,
   buildRiverBridge,
@@ -26,8 +30,11 @@ import {
   buildStatue,
   buildWall,
   groundQuad,
+  pathSections,
+  pathStrip,
   PAVE,
   SLAB,
+  WALL_LIP,
 } from './props';
 
 export interface TownMesh {
@@ -87,27 +94,75 @@ interface Mapper {
   side: 1 | -1;
   pos(a: number, h: number, c: number): [number, number, number];
   normal(a: number, n: [number, number, number]): [number, number, number];
+  /** The river's course at a: channel s, half width, and ds/dz of this bank's edge. */
+  course(a: number, out: Course): Course;
+  anchorS: number;
+  /** Town-frame a of the anchor's z. */
+  a0: number;
 }
+
+interface Course {
+  ch: number;
+  hw: number;
+  m: number;
+}
+
+/** The river's course is smooth at this scale: tabulate it and interpolate. */
+const COURSE_STEP = 0.5;
 
 function makeMapper(site: TownSite, anchorS: number, anchorZ: number, side: 1 | -1): Mapper {
   const rv = site.riverRef;
+  const exact = (a: number, out: Course) => {
+    const z = site.z + a;
+    out.ch = rv.channelAt(z);
+    out.hw = rv.widthAt(z) * 0.5;
+    out.m = rv.channelSlope(z) + side * (rv.widthAt(z + 1) - rv.widthAt(z - 1)) * 0.25;
+    return out;
+  };
+  const lo = -site.halfLen - 400;
+  const n = Math.ceil((2 * site.halfLen + 800) / COURSE_STEP) + 2;
+  const tab = new Float64Array(n * 3);
+  const tmp: Course = { ch: 0, hw: 0, m: 0 };
+  for (let i = 0; i < n; i++) {
+    exact(lo + i * COURSE_STEP, tmp);
+    tab[i * 3] = tmp.ch;
+    tab[i * 3 + 1] = tmp.hw;
+    tab[i * 3 + 2] = tmp.m;
+  }
+  const course = (a: number, out: Course) => {
+    const u = (a - lo) / COURSE_STEP;
+    const i = Math.floor(u);
+    if (i < 0 || i >= n - 1) return exact(a, out);
+    const f = u - i;
+    const k = i * 3;
+    out.ch = tab[k] + (tab[k + 3] - tab[k]) * f;
+    out.hw = tab[k + 1] + (tab[k + 4] - tab[k + 1]) * f;
+    out.m = tab[k + 2] + (tab[k + 5] - tab[k + 2]) * f;
+    return out;
+  };
+  const cs: Course = { ch: 0, hw: 0, m: 0 };
   return {
     side,
+    anchorS,
+    a0: anchorZ - site.z,
+    course,
     pos(a, h, c) {
-      const z = site.z + a;
-      const s = rv.channelAt(z) + side * (rv.widthAt(z) * 0.5 + c);
-      return [wrapS(s - anchorS), h, z - anchorZ];
+      course(a, cs);
+      return [wrapS(cs.ch + side * (cs.hw + c) - anchorS), h, a - (anchorZ - site.z)];
     },
     normal(a, n) {
-      const z = site.z + a;
-      const m = rv.channelSlope(z) + side * (rv.widthAt(z + 1) - rv.widthAt(z - 1)) * 0.25;
+      course(a, cs);
       const ns = side * n[2];
-      const nz = n[0] - side * m * n[2];
+      const nz = n[0] - side * cs.m * n[2];
       const l = Math.hypot(ns, n[1], nz) || 1;
       return [ns / l, n[1] / l, nz / l];
     },
   };
 }
+
+/** Linear colour to 8-bit sRGB-ish (gamma 2.2), tabulated. */
+const GAMMA = new Uint8Array(4097);
+for (let i = 0; i <= 4096; i++) GAMMA[i] = Math.round(Math.pow(i / 4096, 1 / 2.2) * 255);
 
 /** Convert a builder's town-frame arrays into anchor-local mesh data. */
 function finish(mb: MeshBuilder, map: Mapper): TownMesh {
@@ -116,20 +171,29 @@ function finish(mb: MeshBuilder, map: Mapper): TownMesh {
   const normal = new Int8Array(n * 4);
   const color = new Uint8Array(n * 4);
   const surf = new Float32Array(n * 4);
+  const side = map.side;
+  const cs: Course = { ch: 0, hw: 0, m: 0 };
   for (let i = 0; i < n; i++) {
     const a = mb.pos[i * 3];
-    const h = mb.pos[i * 3 + 1];
     const c = mb.pos[i * 3 + 2];
-    const p = map.pos(a, h, c);
-    position[i * 3] = p[0];
-    position[i * 3 + 1] = p[1];
-    position[i * 3 + 2] = p[2];
-    const nn = map.normal(a, [mb.nrm[i * 3], mb.nrm[i * 3 + 1], mb.nrm[i * 3 + 2]]);
-    normal[i * 4] = Math.round(nn[0] * 127);
-    normal[i * 4 + 1] = Math.round(nn[1] * 127);
-    normal[i * 4 + 2] = Math.round(nn[2] * 127);
+    map.course(a, cs);
+    position[i * 3] = wrapS(cs.ch + side * (cs.hw + c) - map.anchorS);
+    position[i * 3 + 1] = mb.pos[i * 3 + 1];
+    position[i * 3 + 2] = a - map.a0;
+    const n0 = mb.nrm[i * 3];
+    const n1 = mb.nrm[i * 3 + 1];
+    const n2 = mb.nrm[i * 3 + 2];
+    const ns = side * n2;
+    const nz = n0 - side * cs.m * n2;
+    const l = 127 / (Math.sqrt(ns * ns + n1 * n1 + nz * nz) || 1);
+    normal[i * 4] = Math.round(ns * l);
+    normal[i * 4 + 1] = Math.round(n1 * l);
+    normal[i * 4 + 2] = Math.round(nz * l);
     // store colour sRGB-encoded for precision
-    for (let k = 0; k < 3; k++) color[i * 4 + k] = Math.round(Math.pow(Math.min(1, Math.max(0, mb.col[i * 3 + k])), 1 / 2.2) * 255);
+    for (let k = 0; k < 3; k++) {
+      const v = mb.col[i * 3 + k];
+      color[i * 4 + k] = GAMMA[Math.round((v < 0 ? 0 : v > 1 ? 1 : v) * 4096)];
+    }
     color[i * 4 + 3] = 255;
     for (let k = 0; k < 4; k++) surf[i * 4 + k] = mb.surf[i * 4 + k];
   }
@@ -180,21 +244,47 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
   const sample = newSample();
   const rv = site.riverRef;
 
-  // cached ground heights on a 6 m grid per bank, bilinear in between
+  // Cached ground heights on a 6 m grid per bank, bilinear in between. Canals
+  // and harbour basins are cut out of the ground; what stands beside them
+  // stands on the bank, so their cuts are left out (else the grid would drag
+  // the banks down into them).
+  const cutAt = (side: 1 | -1, a: number, c: number) => {
+    // (the quay's edge stands at bank level too, not on the dredged river bed)
+    if (site.kind !== 'hamlet' && c > -6.5 && c < QUAY_CUT + 0.5 && Math.abs(a) < site.halfLen + 3) return true;
+    if (c < 0) return false;
+    if (side !== site.side) return false;
+    const m = BANK_CUT + 0.5;
+    for (const cn of site.canals) for (let i = 0; i < cn.pts.length - 1; i++) if (pointSegDist([a, c], cn.pts[i], cn.pts[i + 1]) < cn.width / 2 + m) return true;
+    return site.basins.some((b) => a > b.a0 - m && a < b.a1 + m && c < b.c1 + m);
+  };
   const groundFor = (side: 1 | -1): Ground => {
-    const cache = new Map<number, number>();
     const cell = 6;
+    const sampleAt = (ia: number, ic: number) => {
+      const a = ia * cell;
+      const c = ic * cell;
+      if (cutAt(side, a, c)) return site.level + Math.max(c, 0) * 0.004;
+      const z = site.z + a;
+      const s = rv.channelAt(z) + side * (rv.widthAt(z) * 0.5 + c);
+      return gen.sample(s, z, 2.4, sample).h;
+    };
+    // a flat table over the town (NaN until sampled), a map beyond it
+    const i0 = Math.floor((-site.halfLen - 300) / cell);
+    const j0 = Math.floor(-80 / cell);
+    const ni = Math.ceil((2 * site.halfLen + 600) / cell) + 2;
+    const nj = Math.ceil((site.depthInland + 380) / cell) + 2;
+    const table = new Float64Array(ni * nj).fill(NaN);
+    const beyond = new Map<number, number>();
     const at = (ia: number, ic: number) => {
-      const key = ia * 100_003 + ic;
-      let h = cache.get(key);
-      if (h === undefined) {
-        const a = ia * cell;
-        const c = ic * cell;
-        const z = site.z + a;
-        const s = rv.channelAt(z) + side * (rv.widthAt(z) * 0.5 + c);
-        h = gen.sample(s, z, 2.4, sample).h;
-        cache.set(key, h);
+      const i = ia - i0;
+      const j = ic - j0;
+      if (i >= 0 && i < ni && j >= 0 && j < nj) {
+        let h = table[i * nj + j];
+        if (h !== h) table[i * nj + j] = h = sampleAt(ia, ic);
+        return h;
       }
+      const key = ia * 100_003 + ic;
+      let h = beyond.get(key);
+      if (h === undefined) beyond.set(key, (h = sampleAt(ia, ic)));
       return h;
     };
     return (a: number, c: number) => {
@@ -230,11 +320,11 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     const ground = groundFor(B.side);
     const rng = new Rng(seedFor(site.seed, `build${B.side}`));
     const near: MeshBuilder[] = Array.from({ length: nTiles }, () => new MeshBuilder());
-    const far: MeshBuilder[] = Array.from({ length: nTiles }, () => new MeshBuilder());
+    const farMb: MeshBuilder[] = Array.from({ length: nTiles }, () => new MeshBuilder());
     const both = (a: number, fn: (mb: MeshBuilder, detail: boolean) => void) => {
       const t = tileOf(a);
       fn(near[t], true);
-      fn(far[t], false);
+      fn(farMb[t], false);
     };
     const nearOnly = (a: number, fn: (mb: MeshBuilder) => void) => fn(near[tileOf(a)]);
 
@@ -279,61 +369,142 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
       }
     }
 
-    // ---- pavements, quay and waterfront
-    for (const st of B.streets) {
-      const surf = st.kind === 'plaza' ? SURF.mosaic : st.kind === 'quay' ? SURF.stone : st.kind === 'path' ? SURF.plain : SURF.cobble;
-      const rgb = st.kind === 'plaza' ? lin('#c0b094') : st.kind === 'quay' ? SLAB : st.kind === 'path' ? lin('#7a6a50') : PAVE;
-      // split long streets into tiles
-      const a0 = st.a0;
-      const a1 = st.a1;
-      const step = Math.min(tileLen, 200);
-      for (let a = a0; a < a1 - 0.01; a += step) {
-        const b1 = Math.min(a + step, a1);
-        const r = { a0: a, a1: b1, c0: st.kind === 'quay' ? 1.1 : st.c0, c1: st.c1 };
-        if (B.basins.some((bs) => r.a1 > bs.a0 - 2 && r.a0 < bs.a1 + 2 && r.c0 < bs.c1 + 2)) {
-          // split around the basin
-          const parts = [
-            { a0: r.a0, a1: Math.min(r.a1, B.basins[0].a0 - 2) },
-            { a0: Math.max(r.a0, B.basins[0].a1 + 2), a1: r.a1 },
-          ].filter((p) => p.a1 - p.a0 > 1);
-          for (const pp of parts) {
-            const rr = { ...r, a0: pp.a0, a1: pp.a1 };
-            both((rr.a0 + rr.a1) / 2, (mb, detail) => {
-              if (detail || st.kind === 'plaza' || st.kind === 'quay' || st.kind === 'main') groundQuad(mb, rr, ground, rgb, surf, 0.5, 0.05, detail ? 10 : 30);
-            });
-          }
-          if (st.c1 > B.basins[0].c1 + 2) {
-            const rr = { ...r, c0: Math.max(r.c0, B.basins[0].c1 + 2) };
-            both((rr.a0 + rr.a1) / 2, (mb, detail) => {
-              if (detail || st.kind === 'main') groundQuad(mb, rr, ground, rgb, surf, 0.5, 0.05, detail ? 10 : 30);
-            });
-          }
-          continue;
-        }
-        both((a + b1) / 2, (mb, detail) => {
-          if (detail || st.kind === 'plaza' || st.kind === 'quay' || st.kind === 'main') groundQuad(mb, r, ground, rgb, surf, 0.5, 0.05, detail ? 10 : 30);
-        });
+    // ---- open water on this bank (canals are cut on the primary bank only)
+    const canals = B.side === site.side ? site.canals : [];
+    const wetGap = (a: number, c: number) => {
+      let d = Infinity;
+      for (const cn of canals) for (let i = 0; i < cn.pts.length - 1; i++) d = Math.min(d, pointSegDist([a, c], cn.pts[i], cn.pts[i + 1]) - cn.width / 2);
+      for (const bs of B.basins) if (a > bs.a0 - 1 && a < bs.a1 + 1 && c < bs.c1 + 1) d = -1;
+      return d;
+    };
+    const onBridge = (a: number, c: number) => B.bridges.some((br) => Math.hypot(a - br.a, c - br.c) < br.span / 2 + 2.5);
+    // walkable coping and bank over the cut along a waterside wall (water on the left)
+    const bankFloors = (line: P2[]) => {
+      for (let i = 0; i < line.length - 1; i++) {
+        const [a0, c0] = line[i];
+        const [a1, c1] = line[i + 1];
+        const l = Math.hypot(a1 - a0, c1 - c0);
+        if (l < 1e-3) continue;
+        const ua = (a1 - a0) / l;
+        const uc = (c1 - c0) / l;
+        // overlap the joints so bends leave no gaps
+        const p0: P2 = [a0 - ua * 0.8, c0 - uc * 0.8];
+        const p1: P2 = [a1 + ua * 0.8, c1 + uc * 0.8];
+        const land = (p: P2, k: number): P2 => [p[0] + uc * k, p[1] - ua * k];
+        const t0 = ground(...land([a0, c0], 1.5)) + 0.2;
+        const t1 = ground(...land([a1, c1], 1.5)) + 0.2;
+        addFloorQuad(floors, map, [land(p0, -0.25), land(p1, -0.25), land(p1, WALL_LIP), land(p0, WALL_LIP)], [t0, t1, t1, t0]);
+        // out past the terrain's slope up out of the cut (one ~1.1 m cell of the walkable ground)
+        const out = WALL_INSET + BANK_CUT + 1.6;
+        const q = [land(p0, WALL_LIP), land(p1, WALL_LIP), land(p1, out), land(p0, out)];
+        addFloorQuad(floors, map, q, q.map(([a, c]) => ground(a, c) + 0.05) as [number, number, number, number]);
       }
-      if (st.kind !== 'quay') {
-        // NPC waypoints along streets
-        const len = Math.max(st.a1 - st.a0, st.c1 - st.c0);
-        for (let k = 0; k < len; k += 18) {
-          const a = st.a1 - st.a0 > st.c1 - st.c0 ? st.a0 + k : (st.a0 + st.a1) / 2;
-          const c = st.a1 - st.a0 > st.c1 - st.c0 ? (st.c0 + st.c1) / 2 : st.c0 + k;
-          const p = map.pos(a, ground(a, c), c);
-          waypoints.push(p[0], p[2], p[1], st.kind === 'plaza' ? 1 : 0);
+    };
+
+    // ---- footpaths: ribbons laid on the ground, split between tiles
+    for (const p of B.paths) pavepath(p);
+    function pavepath(p: Path) {
+      const hw = p.width / 2;
+      const surf = p.paving === 'earth' ? SURF.plain : p.paving === 'stone' ? SURF.stone : SURF.cobble;
+      const rgb = p.paving === 'earth' ? EARTH : p.paving === 'stone' ? SLAB : PAVE;
+      const lift = p.kind === 'main' ? 0.06 : p.kind === 'canalwalk' ? 0.055 : p.paving === 'earth' ? 0.04 : 0.045;
+      const far = p.kind === 'main' || p.kind === 'canalwalk';
+      const secs = pathSections(p.pts, hw);
+      // runs of segments within one tile
+      let i0 = 0;
+      for (let i = 1; i <= secs.length - 1; i++) {
+        const t = tileOf((p.pts[i - 1][0] + p.pts[i][0]) / 2);
+        const next = i < secs.length - 1 ? tileOf((p.pts[i][0] + p.pts[i + 1][0]) / 2) : -1;
+        if (next === t) continue;
+        pathStrip(near[t], secs, i0, i, hw, ground, rgb, surf, lift);
+        if (far) {
+          // every other section for the distant mesh
+          const sub = secs.slice(i0, i + 1).filter((_, k, arr) => k % 2 === 0 || k === arr.length - 1);
+          pathStrip(farMb[t], sub, 0, sub.length - 1, hw, ground, rgb, surf, lift);
         }
+        i0 = i;
+      }
+      // NPC waypoints along the way (bridges carry their own)
+      let acc = 12;
+      for (let i = 0; i < p.pts.length; i++) {
+        if (i > 0) acc += Math.hypot(p.pts[i][0] - p.pts[i - 1][0], p.pts[i][1] - p.pts[i - 1][1]);
+        if (acc < 12 && i < p.pts.length - 1) continue;
+        const [a, c] = p.pts[i];
+        if (onBridge(a, c) || wetGap(a, c) < 0.5 || c < 0) continue;
+        acc = 0;
+        const q = map.pos(a, ground(a, c), c);
+        waypoints.push(q[0], q[2], q[1], 0);
       }
     }
-    // quay wall segments (explicit, per tile)
-    if (B.quay) {
+
+    // ---- squares
+    for (const pl of B.plazas) {
+      if (pl.kind === 'quad' || pl.kind === 'amph') continue;
+      const rgb = pl.kind === 'market' ? lin('#c0b094') : pl.kind === 'green' ? GREEN_EARTH : PAVE;
+      const surf = pl.kind === 'market' ? SURF.mosaic : pl.kind === 'green' ? SURF.plain : SURF.cobble;
+      const lift = pl.kind === 'market' ? 0.075 : 0.07;
+      both(pl.a, (mb, detail) => buildPlaza(mb, pl, ground, rgb, surf, lift, detail));
+    }
+    // meeting places in the squares (singing circles, chats)
+    for (const pl of B.plazas) {
+      if (pl.kind === 'amph') continue;
+      const clear = (a: number, c: number) =>
+        !B.fountains.some((f) => Math.hypot(a - f.a, c - f.c) < f.r + 2.2) &&
+        !B.statues.some((st) => Math.hypot(a - st.a, c - st.c) < 2.4) &&
+        !B.stalls.some((st) => Math.hypot(a - st.a, c - st.c) < 2.4) &&
+        !B.trees.some((t) => Math.hypot(a - t.a, c - t.c) < 1.6) &&
+        !B.pools.some((r) => a > r.a0 - 1.5 && a < r.a1 + 1.5 && c > r.c0 - 1.5 && c < r.c1 + 1.5);
+      const spots: P2[] = [];
+      if (pl.kind === 'market') {
+        for (let a = pl.a - pl.r * 1.4; a < pl.a + pl.r * 1.4; a += 9)
+          for (let c = pl.c - pl.r; c < pl.c + pl.r; c += 9) if (inside(pl.rim, a, c, 2)) spots.push([a, c]);
+      } else {
+        const r = pl.r * 0.55;
+        for (let k = 0; k < 5; k++) spots.push([pl.a + Math.cos((k / 5) * Math.PI * 2 + 0.3) * r, pl.c + Math.sin((k / 5) * Math.PI * 2 + 0.3) * r]);
+      }
+      for (const [a, c] of spots) {
+        if (!clear(a, c)) continue;
+        const q = map.pos(a, ground(a, c), c);
+        waypoints.push(q[0], q[2], q[1], 1);
+      }
+    }
+
+    // ---- the quay: a stone deck along the river, broken by canal mouths and basins
+    if (B.quayW > 0) {
       const L = site.halfLen;
+      const cell = 3;
+      let run0: number | null = null;
+      const flush = (a0: number, a1: number) => {
+        for (let a = a0; a < a1 - 0.01; a += 24) {
+          const r = { a0: a, a1: Math.min(a + 24, a1), c0: 1.1, c1: B.quayW };
+          both((r.a0 + r.a1) / 2, (mb, detail) => groundQuad(mb, r, ground, SLAB, SURF.stone, 0.5, 0.05, detail ? 10 : 30));
+        }
+      };
+      for (let a = -L; a < L + cell - 0.01; a += cell) {
+        const dry = a < L && wetGap(a + cell / 2, B.quayW * 0.5) > 0.3 && wetGap(a + cell / 2, 1.2) > 0.3;
+        if (dry && run0 === null) run0 = a;
+        if (!dry && run0 !== null) {
+          flush(run0, Math.min(a, L));
+          run0 = null;
+        }
+      }
+      const dry = (x: number) => wetGap(x, 1.5) > -WALL_INSET + 0.1;
       for (let a = -L; a < L - 0.01; a += 24) {
         const a1 = Math.min(a + 24, L);
         if (B.basins.some((bs) => a1 > bs.a0 && a < bs.a1)) continue;
-        both((a + a1) / 2, (mb, detail) => quaySegment(mb, a, a1, ground, water, detail, rng));
+        both((a + a1) / 2, (mb, detail) => quaySegment(mb, a, a1, ground, water, detail, rng, dry));
+        // walkable coping and deck over the cut beneath them
+        for (const [x0, x1] of drySpans(a, a1, dry)) {
+          const t0 = ground(x0, 1.5) + 0.25;
+          const t1 = ground(x1, 1.5) + 0.25;
+          addFloor(floors, map, x0, x1, -WALL_INSET - 0.25, 1.1, [t0, t1, t1, t0]);
+          const d = QUAY_CUT + 1.6;
+          addFloor(floors, map, x0, x1, 1.1, d, [ground(x0, 1.1) + 0.05, ground(x1, 1.1) + 0.05, ground(x1, d) + 0.05, ground(x0, d) + 0.05]);
+        }
         // quay edge waypoints
-        const p = map.pos((a + a1) / 2, ground((a + a1) / 2, 4), 4);
+        const am = (a + a1) / 2;
+        if (wetGap(am, 4) < 1) continue;
+        const p = map.pos(am, ground(am, 4), 4);
         waypoints.push(p[0], p[2], p[1], 2);
       }
     }
@@ -355,38 +526,49 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     }
     // ---- harbour basin walls (three inland sides)
     for (const bs of B.basins) {
-      const pts: [number, number][] = [
-        [bs.a0, -2],
-        [bs.a0, bs.c1],
-        [bs.a1, bs.c1],
-        [bs.a1, -2],
-      ];
-      both((bs.a0 + bs.a1) / 2, (mb) => buildCanalWalls(mb, pts.map((p, i) => [p[0] + (i === 0 || i === 1 ? -1 : 1) * 0, p[1]] as [number, number]), 0.01, ground, water));
+      const k = WALL_INSET;
+      // (in short pieces: wall tops and floors follow the ground between their ends)
+      const pts = resample(
+        [
+          [bs.a1 - k, -k],
+          [bs.a1 - k, bs.c1 - k],
+          [bs.a0 + k, bs.c1 - k],
+          [bs.a0 + k, -k],
+        ],
+        4,
+      );
+      both((bs.a0 + bs.a1) / 2, (mb) => buildWaterWall(mb, pts, ground, water));
+      bankFloors(pts);
     }
     // ---- canals, bridges
     if (B.side === site.side) {
       for (const cn of site.canals) {
         const a = cn.pts[0][0];
-        both(a, (mb) => buildCanalWalls(mb, cn.pts, cn.width, ground, water));
+        const line = resample(canalWallLine(cn.pts, cn.width, WALL_INSET, -WALL_INSET), 4);
+        both(a, (mb) => buildWaterWall(mb, line, ground, water));
+        bankFloors(line);
       }
     }
     for (const br of B.bridges) {
       both(br.a, (mb) => {
         buildFootBridge(mb, br, ground, water);
       });
-      // bridge deck floor as arched segments
-      const hs = br.span / 2 + 1.5;
-      const base = ground(br.a, br.c);
-      const rise = 1.1 + br.span * 0.04;
+      // bridge deck floor as arched segments, and a waypoint on its crown
+      const { base, hs, rise } = bridgeDeck(br, ground);
+      const ux = Math.cos(br.rot);
+      const uz = Math.sin(br.rot);
+      const hw = br.width / 2;
       const n = 6;
       for (let i = 0; i < n; i++) {
         const x0 = -hs + (2 * hs * i) / n;
         const x1 = -hs + (2 * hs * (i + 1)) / n;
         const y0 = base + rise * (1 - (x0 / hs) ** 2) + 0.2;
         const y1 = base + rise * (1 - (x1 / hs) ** 2) + 0.2;
-        if (br.dir === 'a') addFloor(floors, map, br.a + x0, br.a + x1, br.c - br.width / 2, br.c + br.width / 2, [y0, y1, y1, y0]);
-        else addFloor(floors, map, br.a - br.width / 2, br.a + br.width / 2, br.c + x0, br.c + x1, [y0, y0, y1, y1]);
+        const at = (x: number, z: number): P2 => [br.a + x * ux - z * uz, br.c + x * uz + z * ux];
+        addFloorQuad(floors, map, [at(x0, -hw), at(x1, -hw), at(x1, hw), at(x0, hw)], [y0, y1, y1, y0]);
       }
+      const top = map.pos(br.a, base + rise + 0.2, br.c);
+      waypoints.push(top[0], top[2], top[1], 0);
     }
     // ---- squares, statues, fountains, pools, stalls, racks, gardens, walls
     for (const st of B.statues) {
@@ -402,11 +584,13 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     for (const p of B.pools) both(p.a0, (mb) => buildPool(mb, p, ground));
     for (const s of B.stalls) {
       nearOnly(s.a, (mb) => buildStall(mb, s, ground));
-      const p = map.pos(s.a, ground(s.a, s.c), s.c - 1.8);
+      const ka = s.a + Math.sin(s.rot) * 1.8;
+      const kc = s.c - Math.cos(s.rot) * 1.8;
+      const p = map.pos(ka, ground(ka, kc), kc);
       waypoints.push(p[0], p[2], p[1], 4);
     }
     for (const r of B.racks) nearOnly(r.a, (mb) => buildRack(mb, r, ground));
-    for (const g of B.gardens) nearOnly(g.a0, (mb) => buildGarden(mb, g, ground, rng));
+    for (const g of B.gardens) nearOnly(g.a, (mb) => buildGarden(mb, g, ground, rng));
     for (const w of B.walls) both((w.a0 + w.a1) / 2, (mb, detail) => buildWall(mb, w, ground, detail));
     if (B.amphitheater) {
       const am = B.amphitheater;
@@ -443,7 +627,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     // ---- finish this bank
     for (let t = 0; t < nTiles; t++) {
       if (near[t].vertexCount) nearParts[t].push(finish(near[t], map));
-      if (far[t].vertexCount) farParts[t].push(finish(far[t], map));
+      if (farMb[t].vertexCount) farParts[t].push(finish(farMb[t], map));
     }
     if (!poi && B.side === site.side) {
       const dockA = B.dock.a;
@@ -452,13 +636,10 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
       const inland = map.pos(dockA, 0, dockC + 10);
       const riverDir = Math.atan2(-(dp[0] - inland[0]), -(dp[2] - inland[2]));
       const sp = map.pos(B.signpost.a, ground(B.signpost.a, B.signpost.c), B.signpost.c);
-      const mk = B.market ?? { a0: B.dock.a - 10, a1: B.dock.a + 10, c0: 12, c1: 30 };
-      const ma = (mk.a0 + mk.a1) / 2;
-      const mc = (mk.c0 + mk.c1) / 2 + 6;
-      const mp = map.pos(ma, ground(ma, mc), mc);
-      // arrival on land: a little inland from the dock, facing the river
-      const ga = dockA + 8;
-      const gc = site.kind === 'hamlet' ? 10 : 14;
+      const mp = map.pos(B.spot.a, ground(B.spot.a, B.spot.c), B.spot.c);
+      // arrival on land: a little inland from the dock (in the market's dock aisle), facing the river
+      const ga = site.kind === 'hamlet' ? dockA + 8 : B.spot.a;
+      const gc = site.kind === 'hamlet' ? 10 : B.spot.c;
       const gp = map.pos(ga, ground(ga, gc), gc);
       poi = {
         dock: [dp[0], dp[2], dp[1], riverDir],
@@ -511,25 +692,45 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
   };
 }
 
-/** Quay wall + coping + stone deck for one stretch of bank. */
-function quaySegment(mb: MeshBuilder, a0: number, a1: number, ground: Ground, water: number, detail: boolean, rng: Rng) {
+/** Stretches of [a0, a1] where `dry` holds, to the metre. */
+function drySpans(a0: number, a1: number, dry: (a: number) => boolean): [number, number][] {
+  const spans: [number, number][] = [];
+  for (let a = a0; a < a1 - 0.01; a += 1) {
+    const b = Math.min(a + 1, a1);
+    if (!dry((a + b) / 2)) continue;
+    const last = spans[spans.length - 1];
+    if (last && Math.abs(last[1] - a) < 1e-6) last[1] = b;
+    else spans.push([a, b]);
+  }
+  return spans;
+}
+
+/** Quay wall and coping for one stretch of bank (broken where canals open into the river). */
+function quaySegment(mb: MeshBuilder, a0: number, a1: number, ground: Ground, water: number, detail: boolean, rng: Rng, dry: (a: number) => boolean) {
   mb.resetFrame();
-  const top0 = ground(a0, 1.5) + 0.25;
-  const top1 = ground(a1, 1.5) + 0.25;
   const stone = lin('#9c8c76');
-  mb.quad([a0, water - 4.2, 0], [a1, water - 4.2, 0], [a1, top1, 0], [a0, top0, 0], stone, SURF.stone, 0.13);
-  mb.quad([a1, top1, 0], [a0, top0, 0], [a0, top0, 1.1], [a1, top1, 1.1], SLAB, SURF.stone, 0.61);
+  const q = -WALL_INSET;
+  for (const [x0, x1] of drySpans(a0, a1, dry)) {
+    const top0 = ground(x0, 1.5) + 0.25;
+    const top1 = ground(x1, 1.5) + 0.25;
+    // face (towards the river) and coping with its front lip
+    mb.quad([x1, water - 4.2, q], [x0, water - 4.2, q], [x0, top0, q], [x1, top1, q], stone, SURF.stone, 0.13);
+    mb.quad([x1, top1 - 0.25, q - 0.25], [x0, top0 - 0.25, q - 0.25], [x0, top0, q - 0.25], [x1, top1, q - 0.25], SLAB, SURF.stone, 0.61);
+    mb.quad([x1, top1, q - 0.25], [x0, top0, q - 0.25], [x0, top0, 1.1], [x1, top1, 1.1], SLAB, SURF.stone, 0.61);
+    mb.quad([x0, top0 - 0.3, 1.1], [x1, top1 - 0.3, 1.1], [x1, top1, 1.1], [x0, top0, 1.1], SLAB, SURF.stone, 0.61);
+  }
   if (detail) {
     for (let a = a0 + 6; a < a1 - 1; a += 12) {
+      if (!dry(a)) continue;
       const t = ground(a, 1.5) + 0.25;
-      mb.cylinder(a, 0.7, t, t + 0.75, 0.22, 0.18, 7, lin('#4a4038'), SURF.stone, 0.3);
+      mb.cylinder(a, q + 0.6, t, t + 0.75, 0.22, 0.18, 7, lin('#4a4038'), SURF.stone, 0.3);
     }
-    if (rng.chance(0.3)) {
+    if (rng.chance(0.3) && dry((a0 + a1) / 2 - 2) && dry((a0 + a1) / 2 + 2)) {
       // stairs + ramp down to the water
       const a = (a0 + a1) / 2;
       const t = ground(a, 1.5);
       const n = Math.max(3, Math.ceil((t - water + 0.6) / 0.3));
-      for (let i = 0; i < n; i++) mb.box(a - 1.2, t - i * 0.3 - 0.3, -0.1 - (i + 1) * 0.45, a + 1.2, t - i * 0.3, -0.1 - i * 0.45, stone, SURF.stone, SURF.stone, 0.4);
+      for (let i = 0; i < n; i++) mb.box(a - 1.2, t - i * 0.3 - 0.3, q - 0.1 - (i + 1) * 0.45, a + 1.2, t - i * 0.3, q - 0.1 - i * 0.45, stone, SURF.stone, SURF.stone, 0.4);
     }
   }
 }
@@ -550,6 +751,33 @@ function addBox(out: number[], map: Mapper, a: number, c: number, w: number, d: 
   }
   out.push(h0, h1);
 }
+
+/** Walkable floor: any convex quad in (a, c) with a height per corner. */
+function addFloorQuad(out: number[], map: Mapper, corners: P2[], h: [number, number, number, number]) {
+  for (const [a, c] of corners) {
+    const p = map.pos(a, 0, c);
+    out.push(p[0], p[2]);
+  }
+  out.push(h[0], h[1], h[2], h[3]);
+}
+
+/** Is (a, c) inside an outline by at least `m`? */
+function inside(rim: P2[], a: number, c: number, m: number): boolean {
+  let inn = false;
+  let d = Infinity;
+  for (let i = 0, j = rim.length - 1; i < rim.length; j = i++) {
+    const [xi, yi] = rim[i];
+    const [xj, yj] = rim[j];
+    if (yi > c !== yj > c && a < ((xj - xi) * (c - yi)) / (yj - yi) + xi) inn = !inn;
+    d = Math.min(d, pointSegDist([a, c], rim[j], rim[i]));
+  }
+  return inn && d > m;
+}
+
+const EARTH = lin('#8a7658');
+/** Waterside walls stand this far out in the water, in front of the terrain's slope into it. */
+const WALL_INSET = 1.2;
+const GREEN_EARTH = lin('#8c7c5c');
 
 /** Walkable floor: rectangle in (a, c) with corner heights [a0c0, a1c0, a1c1, a0c1]. */
 function addFloor(out: number[], map: Mapper, a0: number, a1: number, c0: number, c1: number, h: [number, number, number, number]) {

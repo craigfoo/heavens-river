@@ -134,7 +134,8 @@ export function biomeColor(o: TerrainSample, ny: number, s: number, z: number, o
     const n = 0.65 * value2(s / 11, z / 11, 0, 71) + 0.35 * value2(s / 3.7, z / 3.7, 0, 72);
     const lawn = smoothstep(0.42, 0.62, n);
     mix3(C.town, C.townLawn, lawn, _yard);
-    mix3(col, _yard, o.town * 0.85, col);
+    // (the cuts of quays and canals keep their rock colour)
+    mix3(col, _yard, o.town * 0.85 * (1 - rock * o.cut), col);
     grass *= 1 - o.town;
     farm *= 1 - o.town;
   }

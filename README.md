@@ -259,10 +259,15 @@ No town names are used from the book. Towns are generated, but their look follow
 *Water first*
 - Towns grow along the bank, not away from it. The river is the main street.
 - Every waterfront building has a water entrance: stone slipways, underwater doorways, or ladders straight into the river.
-- Canals cut through town blocks; small footbridges arch over them.
+- Canals cut through the neighbourhoods, lined with stone walks; small footbridges arch over them.
 - Public bathing and swimming pools in squares; fountains with water channels in the pavement.
 - Docks, piers and boathouses are the busiest spaces. Barges moor stern-in along long stone quays.
 - Streams are channeled through town in open gutters and stone culverts.
+
+*Walking towns*
+- Quinlans walk everywhere and have no carts, so there are no roads: footpaths, lanes and squares only, laid out like an old walking town rather than a grid.
+- Each neighbourhood gathers round its own small common (a fountain, well, statue or grove), with lanes in rings around it and spokes out from it. Winding paths link the commons; every house faces the path it stands on.
+- Packed terraces in the old core round the market, detached houses with yards and orchards further out.
 
 *Materials and construction*
 - Lower floors in fitted fieldstone or river stone (flood-resistant). Upper floors in timber framing with plaster infill.
@@ -291,7 +296,7 @@ No town names are used from the book. Towns are generated, but their look follow
 
 ### 7.2 Town generation
 - Towns are placed procedurally along rivers (hierarchy and spacing from the anatomy above), deterministic from a seed.
-- Layout: start from the river spline, lay a quay along the bank, grow streets perpendicular to and parallel with the water, add canals on flat ground, place the market square near the main dock, then fill blocks by district type.
+- Layout: start from the river spline, lay a quay along the bank, open the market square onto it by the main dock, scatter neighbourhood commons behind, link them with winding paths (a spanning tree plus some loops, bridged square-on over canals), ring each common with lanes and spokes, then stand buildings along every path by district type, facing it.
 - Buildings assembled from a modular kit (7.1 materials) with per-building variation: size, roof type, color, decoration density.
 - Names: invented from a syllable table (no book names). Optional setting to rename towns.
 - Performance: towns rendered with instancing and merged meshes; decoration detail streams in only within ~300 m.

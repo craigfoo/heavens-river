@@ -92,6 +92,9 @@ export class Player {
       const pf = this.platform.floor(this.s, this.z);
       if (pf !== null) floor = Math.max(floor, pf);
     }
+    // piers, bridges and quaysides: no wading when standing on them
+    const sf = world.structureFloor(this.s, this.z, this.h, PLAYER.stepHeight + 0.15);
+    if (sf !== null) floor = Math.max(floor, sf);
     const w = world.sampleAt(this.s, this.z, this.sample);
     this.waterLevel = w.water;
     this.flowS = w.flowS;

@@ -11,6 +11,15 @@ import type { TerrainSample, WorldGen } from './world';
 
 export type TownKind = 'hamlet' | 'town' | 'city';
 
+/**
+ * How far the cut of a quay, canal or basin runs in under its bank, past the
+ * waterline. Waterside walls stand out in the water with a coping back over
+ * the bank, so the terrain's slope down into the cut (as coarse as the
+ * terrain's level of detail) stays hidden behind and beneath them.
+ */
+export const QUAY_CUT = 3;
+export const BANK_CUT = 2.5;
+
 export interface CanalDef {
   /** Polyline in town-local (a, c) coordinates. */
   pts: [number, number][];
@@ -174,32 +183,39 @@ export class TownTerrain {
     let mask = alongMask * acrossMask;
     if (c < -2) mask = 0;
     o.town = mask;
-    if (mask <= 0 && c > -40) return h;
+    // (in front of a quay the river is dredged deep, below)
+    const quay = t.kind !== 'hamlet' && c > -18 && alongMask > 0.5;
+    if (mask <= 0 && c > -40 && !quay) return h;
     // flat town ground, gently rising inland for drainage
     const ground = t.level + Math.max(c, 0) * 0.004;
     let out = h;
     if (c >= -2) out = h + (ground - h) * mask;
+    const flat = out;
     // stone quay: deep water right at the wall for towns and cities
-    if (t.kind !== 'hamlet' && c < 0 && c > -18 && alongMask > 0.5) {
-      out = Math.min(out, t.waterLevel - 3.4 * clamp(1 + c / 18, 0, 1) - 0.5);
+    if (quay && (c < 0 || (c < QUAY_CUT && Math.abs(a) < t.halfLen))) {
+      out = Math.min(out, t.waterLevel - 3.4 * clamp(1 + Math.min(c, 0) / 18, 0, 1) - 0.5);
     }
-    // canals and harbour basins
+    // canals and harbour basins (on the town's own bank)
     let wet = false;
-    for (const cn of t.canals) {
-      const d = polyDist(cn.pts, a, c);
-      const e = d - cn.width * 0.5;
-      if (e < 3) {
-        if (e < 0 && c > -4) out = Math.min(out, t.waterLevel - cn.depth);
-        if (e < 1.5) wet = true;
+    if (onPrimary) {
+      for (const cn of t.canals) {
+        const d = polyDist(cn.pts, a, c);
+        const e = d - cn.width * 0.5;
+        if (e < BANK_CUT + 1.5) {
+          if (e < BANK_CUT && c > -4) out = Math.min(out, t.waterLevel - cn.depth);
+          wet = true;
+        }
+      }
+      for (const b of t.basins) {
+        const m = BANK_CUT + 1.5;
+        if (a > b.a0 - m && a < b.a1 + m && c > b.c0 - m && c < b.c1 + m) {
+          const inside = a > b.a0 - BANK_CUT && a < b.a1 + BANK_CUT && c < b.c1 + BANK_CUT;
+          if (inside) out = Math.min(out, t.waterLevel - 4.5);
+          wet = true;
+        }
       }
     }
-    for (const b of t.basins) {
-      if (a > b.a0 - 2 && a < b.a1 + 2 && c > b.c0 - 2 && c < b.c1 + 2) {
-        const inside = a > b.a0 && a < b.a1 && c < b.c1;
-        if (inside) out = Math.min(out, t.waterLevel - 4.5);
-        wet = true;
-      }
-    }
+    if (out < flat - 0.3) o.cut = 1;
     if (wet && o.water < t.waterLevel) {
       o.water = t.waterLevel;
       o.riverClass = RIVER_CANAL;

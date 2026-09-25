@@ -3,7 +3,8 @@
 
 import { Rng } from '../core/rng';
 import { buildBoat, GOLD, PAINT, STONE, TIMBER, WOOD, type Ground } from './kit';
-import type { BankLayout, Bridge, Fountain, Pier, Rect, Statue, Stall, WallSeg } from './layout';
+import type { OBB, P2 } from './geom';
+import type { BankLayout, Bridge, Fountain, Pier, Plaza, Rect, Statue, Stall, WallSeg } from './layout';
 import { lin, MeshBuilder, SURF, type V3 } from './meshBuilder';
 
 const PAVE = lin('#a89a84');
@@ -99,45 +100,83 @@ export function buildPier(mb: MeshBuilder, p: Pier, ground: Ground, water: numbe
   for (let c = -p.len + 4; c < -2; c += 6) mb.cylinder(hw + 0.1, c, deck - 0.3, deck + 0.6, 0.14, 0.12, 6, lin('#4a3828'), SURF.timber, 0.2);
 }
 
-/** Stone walls lining a canal segment in (a, c). */
-export function buildCanalWalls(mb: MeshBuilder, pts: [number, number][], width: number, ground: Ground, water: number) {
+/** How far a waterside wall's coping reaches back over the bank. */
+export const WALL_LIP = 2.4;
+
+/**
+ * Stone wall along a waterside, with the water on the left of the line's
+ * direction: a face down into the water and a coping slab back over the bank
+ * (it hides where the terrain drops into the cut).
+ */
+export function buildWaterWall(mb: MeshBuilder, pts: P2[], ground: Ground, water: number, lip = WALL_LIP, depth = 2.8) {
   mb.resetFrame();
+  const o = 0.25;
   for (let i = 0; i < pts.length - 1; i++) {
     const [a0, c0] = pts[i];
     const [a1, c1] = pts[i + 1];
-    const da = a1 - a0;
-    const dc = c1 - c0;
-    const l = Math.hypot(da, dc) || 1;
-    const na = -dc / l;
-    const nc = da / l;
-    const hw = width / 2;
-    for (const side of [-1, 1]) {
-      const pa0 = a0 + na * hw * side;
-      const pc0 = c0 + nc * hw * side;
-      const pa1 = a1 + na * hw * side;
-      const pc1 = c1 + nc * hw * side;
-      const t0 = ground(pa0 - na * side * 1.5, pc0 - nc * side * 1.5) + 0.2;
-      const t1 = ground(pa1 - na * side * 1.5, pc1 - nc * side * 1.5) + 0.2;
-      // wall face (facing into the canal)
-      if (side > 0) mb.quad([pa1, water - 2.8, pc1], [pa0, water - 2.8, pc0], [pa0, t0, pc0], [pa1, t1, pc1], QUAY_STONE, SURF.stone, 0.5);
-      else mb.quad([pa0, water - 2.8, pc0], [pa1, water - 2.8, pc1], [pa1, t1, pc1], [pa0, t0, pc0], QUAY_STONE, SURF.stone, 0.5);
-      // coping
-      const oa = na * side * 0.8;
-      const oc = nc * side * 0.8;
-      if (side > 0) mb.quad([pa0, t0, pc0], [pa1, t1, pc1], [pa1 + oa, t1, pc1 + oc], [pa0 + oa, t0, pc0 + oc], SLAB, SURF.stone, 0.6);
-      else mb.quad([pa1, t1, pc1], [pa0, t0, pc0], [pa0 + oa, t0, pc0 + oc], [pa1 + oa, t1, pc1 + oc], SLAB, SURF.stone, 0.6);
-    }
+    const l = Math.hypot(a1 - a0, c1 - c0);
+    if (l < 1e-3) continue;
+    // towards the water
+    const na = -(c1 - c0) / l;
+    const nc = (a1 - a0) / l;
+    const t0 = ground(a0 - na * 1.5, c0 - nc * 1.5) + 0.2;
+    const t1 = ground(a1 - na * 1.5, c1 - nc * 1.5) + 0.2;
+    mb.quad([a0, water - depth, c0], [a1, water - depth, c1], [a1, t1, c1], [a0, t0, c0], QUAY_STONE, SURF.stone, 0.5);
+    mb.quad([a0 + na * o, t0 - 0.25, c0 + nc * o], [a1 + na * o, t1 - 0.25, c1 + nc * o], [a1 + na * o, t1, c1 + nc * o], [a0 + na * o, t0, c0 + nc * o], SLAB, SURF.stone, 0.6);
+    mb.quad([a0 + na * o, t0, c0 + nc * o], [a1 + na * o, t1, c1 + nc * o], [a1 - na * lip, t1, c1 - nc * lip], [a0 - na * lip, t0, c0 - nc * lip], SLAB, SURF.stone, 0.6);
+    // back edge, down to the bank
+    mb.quad([a1 - na * lip, t1 - 0.3, c1 - nc * lip], [a0 - na * lip, t0 - 0.3, c0 - nc * lip], [a0 - na * lip, t0, c0 - nc * lip], [a1 - na * lip, t1, c1 - nc * lip], SLAB, SURF.stone, 0.6);
   }
 }
 
-/** Arched stone footbridge (over a canal). Returns the deck height profile for collisions. */
-export function buildFootBridge(mb: MeshBuilder, br: Bridge, ground: Ground, water: number) {
-  const rot = br.dir === 'a' ? 0 : Math.PI / 2;
-  mb.frame(br.a, 0, br.c, rot);
-  const base = ground(br.a, br.c + (br.dir === 'a' ? 0 : 0));
+/**
+ * The line of a canal's walls, set `inset` into the water: up one side, round
+ * its inland end and back down the other, with the water on the left. Starts
+ * and ends where the canal leaves the quay (c = cMin).
+ */
+export function canalWallLine(pts: P2[], width: number, inset: number, cMin: number): P2[] {
+  const hw = width / 2 - inset;
+  const secs = pathSections(pts, hw);
+  // start where the canal leaves the quay (its mouth is spanned by the quay's own wall)
+  const clip = (line: P2[]): P2[] => {
+    for (let i = 0; i < line.length - 1; i++) {
+      const [a0, c0] = line[i];
+      const [a1, c1] = line[i + 1];
+      if (c1 < cMin) continue;
+      if (c0 >= cMin) return line.slice(i);
+      const t = (cMin - c0) / (c1 - c0);
+      return [[a0 + (a1 - a0) * t, cMin], ...line.slice(i + 1)];
+    }
+    return [];
+  };
+  const right = clip(secs.map((x) => x.r));
+  const left = clip(secs.map((x) => x.l)).reverse();
+  const last = pts[pts.length - 1];
+  const prev = pts[pts.length - 2];
+  const l = Math.hypot(last[0] - prev[0], last[1] - prev[1]) || 1;
+  // from the right-hand wall round the end to the left-hand one
+  const th0 = Math.atan2(-(last[0] - prev[0]) / l, (last[1] - prev[1]) / l);
+  const cap: P2[] = [];
+  for (let k = 1; k < 8; k++) {
+    const th = th0 + (k / 8) * Math.PI;
+    cap.push([last[0] + Math.cos(th) * hw, last[1] + Math.sin(th) * hw]);
+  }
+  return [...right, ...cap, ...left];
+}
+
+/** Deck profile of a footbridge: base level (the higher bank), half length and rise of the arch. */
+export function bridgeDeck(br: Bridge, ground: Ground): { base: number; hs: number; rise: number } {
   const hs = br.span / 2 + 1.5;
+  const ca = Math.cos(br.rot) * hs;
+  const cc = Math.sin(br.rot) * hs;
+  return { base: Math.max(ground(br.a - ca, br.c - cc), ground(br.a + ca, br.c + cc)), hs, rise: 1.1 + br.span * 0.04 };
+}
+
+/** Arched stone footbridge (over a canal), spanning along its rotation. */
+export function buildFootBridge(mb: MeshBuilder, br: Bridge, ground: Ground, water: number) {
+  mb.frame(br.a, 0, br.c, br.rot);
+  const { base, hs, rise } = bridgeDeck(br, ground);
   const hw = br.width / 2;
-  const rise = 1.1 + br.span * 0.04;
   const n = 10;
   for (let i = 0; i < n; i++) {
     const x0 = -hs + (2 * hs * i) / n;
@@ -161,7 +200,6 @@ export function buildFootBridge(mb: MeshBuilder, br: Bridge, ground: Ground, wat
   mb.box(-hs, base + 0.2, -hw - 0.25, hs, base + rise + 0.9, -hw, SLAB, SURF.stone, SURF.stone, 0.62);
   mb.box(-hs, base + 0.2, hw, hs, base + rise + 0.9, hw + 0.25, SLAB, SURF.stone, SURF.stone, 0.62);
   mb.resetFrame();
-  return { base, rise, hs };
 }
 
 /** Grand multi-arch bridge across the river (cities). Spans from c=0 to c=-width on the primary bank frame. */
@@ -400,23 +438,109 @@ export function buildSignpost(mb: MeshBuilder, a: number, c: number, ground: Gro
   mb.resetFrame();
 }
 
-export function buildGarden(mb: MeshBuilder, g: Rect, ground: Ground, rng: Rng) {
-  mb.resetFrame();
-  groundQuad(mb, g, ground, lin('#5a4a32'), SURF.plain, 0.1, 0.03);
+/** Vegetable plot (an oriented rectangle): tilled soil, crop rows and a wattle fence. */
+export function buildGarden(mb: MeshBuilder, g: OBB, ground: Ground, rng: Rng) {
+  const cr = Math.cos(g.rot);
+  const sr = Math.sin(g.rot);
+  const gl = (x: number, z: number) => ground(g.a + x * cr - z * sr, g.c + x * sr + z * cr);
+  mb.frame(g.a, 0, g.c, g.rot);
+  const na = Math.max(1, Math.ceil((g.hw * 2) / 4));
+  const nc = Math.max(1, Math.ceil((g.hd * 2) / 4));
+  const soil = lin('#5a4a32');
+  for (let i = 0; i < na; i++)
+    for (let j = 0; j < nc; j++) {
+      const x0 = -g.hw + (2 * g.hw * i) / na;
+      const x1 = -g.hw + (2 * g.hw * (i + 1)) / na;
+      const z0 = -g.hd + (2 * g.hd * j) / nc;
+      const z1 = -g.hd + (2 * g.hd * (j + 1)) / nc;
+      mb.quad([x1, gl(x1, z0) + 0.03, z0], [x0, gl(x0, z0) + 0.03, z0], [x0, gl(x0, z1) + 0.03, z1], [x1, gl(x1, z1) + 0.03, z1], soil, SURF.plain, 0.1, [x1, z0, x0, z1]);
+    }
   // crop rows
-  const rows = Math.floor((g.a1 - g.a0) / 0.9);
+  const rows = Math.floor((g.hw * 2) / 0.9);
   const crop = rng.pick([lin('#4a7a2a'), lin('#6a8a2a'), lin('#8a6a3a')]);
   for (let i = 0; i < rows; i++) {
-    const a = g.a0 + 0.45 + i * 0.9;
-    const base = ground(a, (g.c0 + g.c1) / 2);
-    mb.box(a - 0.18, base, g.c0 + 0.4, a + 0.18, base + 0.28, g.c1 - 0.4, crop, SURF.turf, SURF.turf, 0.3);
+    const x = -g.hw + 0.45 + i * 0.9;
+    const base = gl(x, 0);
+    mb.box(x - 0.18, base, -g.hd + 0.4, x + 0.18, base + 0.28, g.hd - 0.4, crop, SURF.turf, SURF.turf, 0.3);
   }
   // wattle fence posts
-  for (let a = g.a0; a <= g.a1; a += 1.5) {
-    for (const c of [g.c0, g.c1]) {
-      const base = ground(a, c);
-      mb.box(a - 0.04, base, c - 0.04, a + 0.04, base + 0.8, c + 0.04, TIMBER[1], SURF.timber, SURF.timber, 0.2);
+  const nf = Math.max(1, Math.round((g.hw * 2) / 2.4));
+  for (let k = 0; k <= nf; k++) {
+    const x = -g.hw + (2 * g.hw * k) / nf;
+    for (const z of [-g.hd, g.hd]) {
+      const base = gl(x, z);
+      mb.box(x - 0.04, base, z - 0.04, x + 0.04, base + 0.8, z + 0.04, TIMBER[1], SURF.timber, SURF.timber, 0.2);
     }
+  }
+  mb.resetFrame();
+}
+
+/**
+ * Cross-sections of a path ribbon: left and right edge points and the
+ * distance along the path (the paving pattern runs along it).
+ */
+export function pathSections(pts: P2[], hw: number): { l: P2; r: P2; u: number }[] {
+  const out: { l: P2; r: P2; u: number }[] = [];
+  let u = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0) u += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const p = pts[Math.max(0, i - 1)];
+    const q = pts[Math.min(pts.length - 1, i + 1)];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+    // left normal, lengthened at bends so the edges keep their width
+    let nx = -(q[1] - p[1]) / l;
+    let nz = (q[0] - p[0]) / l;
+    if (i > 0 && i < pts.length - 1) {
+      const e = pts[i + 1];
+      const s = pts[i];
+      const ls = Math.hypot(e[0] - s[0], e[1] - s[1]) || 1;
+      const k = Math.max(0.6, nx * (-(e[1] - s[1]) / ls) + nz * ((e[0] - s[0]) / ls));
+      nx /= k;
+      nz /= k;
+    }
+    out.push({ l: [pts[i][0] + nx * hw, pts[i][1] + nz * hw], r: [pts[i][0] - nx * hw, pts[i][1] - nz * hw], u });
+  }
+  return out;
+}
+
+/** One stretch of a path ribbon (sections i0..i1) laid on the ground. */
+export function pathStrip(mb: MeshBuilder, secs: { l: P2; r: P2; u: number }[], i0: number, i1: number, hw: number, ground: Ground, rgb: V3, surf: number, lift: number) {
+  mb.resetFrame();
+  for (let i = i0; i < i1; i++) {
+    const s0 = secs[i];
+    const s1 = secs[i + 1];
+    mb.quad(
+      [s0.l[0], ground(s0.l[0], s0.l[1]) + lift, s0.l[1]],
+      [s1.l[0], ground(s1.l[0], s1.l[1]) + lift, s1.l[1]],
+      [s1.r[0], ground(s1.r[0], s1.r[1]) + lift, s1.r[1]],
+      [s0.r[0], ground(s0.r[0], s0.r[1]) + lift, s0.r[1]],
+      rgb,
+      surf,
+      0.5,
+      [s0.u, hw, s1.u, -hw],
+    );
+  }
+}
+
+/** Paving of a square: rings from the centre out to its outline, following the ground. */
+export function buildPlaza(mb: MeshBuilder, p: Plaza, ground: Ground, rgb: V3, surf: number, lift: number, detail: boolean) {
+  mb.resetFrame();
+  const rings = Math.max(1, Math.ceil(p.r / (detail ? 6 : 14)));
+  const n = p.rim.length;
+  const up: V3 = [0, 1, 0];
+  const param = ((Math.abs(p.a * 7.13 + p.c * 3.71) % 1) + 1) % 1;
+  const vert = (a: number, c: number) => mb.vertex([a, ground(a, c) + lift, c], up, rgb, surf, a, c, param);
+  const centre = vert(p.a, p.c);
+  let prev: number[] = [];
+  for (let k = 1; k <= rings; k++) {
+    const f = k / rings;
+    const ring = p.rim.map(([a, c]) => vert(p.a + (a - p.a) * f, p.c + (c - p.c) * f));
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      if (k === 1) mb.idx.push(centre, ring[j], ring[i]);
+      else mb.idx.push(prev[i], prev[j], ring[j], prev[i], ring[j], ring[i]);
+    }
+    prev = ring;
   }
 }
 

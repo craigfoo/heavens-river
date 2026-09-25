@@ -47,6 +47,8 @@ export interface TerrainSample {
   farm: number;
   orchard: number;
   town: number;
+  /** 1 where a town cut the ground away for a quay, canal or basin. */
+  cut: number;
   ridge: number;
   /** Height of water level of the owning main river (for biome decisions). */
   baseLevel: number;
@@ -68,6 +70,7 @@ export function newSample(): TerrainSample {
     farm: 0,
     orchard: 0,
     town: 0,
+    cut: 0,
     ridge: 0,
     baseLevel: 0,
   };
@@ -620,6 +623,7 @@ export class WorldGen {
     // towns: flatten and carve canals / harbour basins
     const towns = ctx ? ctx.towns : this.adhocTowns(s, z);
     let townMask = 0;
+    o.cut = 0;
     for (let i = 0; i < towns.length; i++) {
       const tt = towns[i];
       const res = tt.apply(s, z, h, o);
