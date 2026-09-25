@@ -100,6 +100,37 @@ vec3 roofWeather(vec3 col, vec2 uv) {
   return col;
 }
 
+// Weathering of walls. param 3..4: a building wall of age param - 3, surface v
+// measured up from its foot: rising damp and moss at the foot, rain streaks.
+// param >= 5: a waterside wall with its waterline at v = param - 5: algae
+// below the water and a tide mark above it.
+float wallAgeOf(float param) { return param >= 3.0 && param < 4.0 ? param - 3.0 : 0.0; }
+vec3 wallPatina(vec3 col, vec2 uv, float param) {
+  if (param >= 5.0) {
+    float above = uv.y - (param - 5.0);
+    float wob = 0.12 * tNoise(vec2(uv.x * 0.9, 1.7));
+    col = mix(col, col * vec3(0.42, 0.52, 0.36), (1.0 - smoothstep(-0.05, 0.05, above + wob)) * 0.85);
+    col = mix(col, col * vec3(0.62, 0.66, 0.54), (1.0 - smoothstep(0.0, 0.7, above - wob)) * step(0.0, above) * 0.6);
+    return col;
+  }
+  float age = wallAgeOf(param);
+  if (age <= 0.0) return col;
+  float n = tNoise(uv * 1.3 + 7.0);
+  float damp = age * (1.0 - smoothstep(0.05, 0.35 + 0.8 * age + 0.35 * n, uv.y));
+  col = mix(col, col * vec3(0.5, 0.58, 0.38), damp * 0.75);
+  float streak = smoothstep(0.6, 0.92, tNoise(vec2(uv.x * 1.6, uv.y * 0.12 + 3.0))) * age;
+  col *= 1.0 - 0.22 * streak;
+  return col;
+}
+
+// Old walls are patched: now and then a stone of another colour.
+vec3 repaired(vec3 col, vec2 cell, float param) {
+  float age = wallAgeOf(param);
+  float r = tHash(cell + 9.1);
+  if (r > 1.0 - 0.3 * age) col *= r > 1.0 - 0.15 * age ? vec3(1.14, 1.04, 0.9) : vec3(0.8, 0.84, 0.9);
+  return col;
+}
+
 vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
   vec2 fw2 = fwidth(uv);
   float fw = max(fw2.x, fw2.y);
@@ -123,7 +154,9 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     float edge = 1.0 - pow(max(abs(q.x), abs(q.y)), 6.0 + 4.0 * h);
     col = base * (0.7 + 0.45 * h) * (0.9 + 0.2 * tNoise(uv * 7.0));
     col = mix(col, col * vec3(1.06, 1.0, 0.9), step(0.7, tHash(vec2(cx + 3.0, row))));
+    col = repaired(col, vec2(cx, row), param);
     col = mix(base * 0.42, col, mix(1.0, smoothstep(0.0, 0.35, edge), detail));
+    col = wallPatina(col, uv, param);
     tRough = 0.9;
   } else if (t == 2 || t == 18) {
     // plaster (weathered), optionally half-timbered
@@ -142,6 +175,13 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
       if (tHash(cell) > 0.55) frame = min(frame, diag);
       col = mix(col, wood * (0.8 + 0.4 * tNoise(uv * 8.0)), 1.0 - smoothstep(-fw, fw, frame));
     }
+    // old plaster flakes off the stone beneath
+    float age = wallAgeOf(param);
+    if (age > 0.0) {
+      float fl = smoothstep(0.8 - 0.28 * age, 0.83 - 0.28 * age, tNoise(uv * 0.8 + 21.0));
+      col = mix(col, vec3(0.42, 0.36, 0.29) * (0.8 + 0.35 * tNoise(uv * 9.0)), fl * 0.8);
+    }
+    col = wallPatina(col, uv, param);
     tRough = 0.92;
   } else if (t == 3) {
     col = base * (0.7 + 0.5 * tNoise(vec2(uv.x * 30.0, uv.y * 2.0)));
@@ -258,6 +298,72 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     float e = length(vec2(uv.x - 0.7, fract(uv.y / 2.2) * 2.2 - 1.1)) - 0.35;
     col = mix(col, vec3(0.9, 0.7, 0.2), lineAA(abs(e), 0.06, fw));
     tRough = 0.9;
+  } else if (t == 21) {
+    // dressed ashlar: squared blocks in regular courses, fine joints
+    float ch = 0.42;
+    float row = floor(uv.y / ch);
+    float bl = 0.85 + 0.35 * tHash(vec2(row, 4.2));
+    float x = uv.x / bl + tHash(vec2(row, 1.3)) * 3.0;
+    float cx = floor(x);
+    float jx = min(fract(x), 1.0 - fract(x)) * bl;
+    float jy = min(fract(uv.y / ch), 1.0 - fract(uv.y / ch)) * ch;
+    float h = tHash(vec2(cx, row));
+    col = base * (0.88 + 0.18 * h) * (0.94 + 0.1 * tNoise(uv * 6.0));
+    col = repaired(col, vec2(cx, row), param);
+    col = mix(base * 0.62, col, mix(1.0, smoothstep(0.006, 0.02 + fw * 2.0, min(jx, jy)), detail));
+    col = wallPatina(col, uv, param);
+    tRough = 0.75;
+  } else if (t == 22) {
+    // fitted fieldstone: irregular stones set in mortar
+    vec2 g = uv / 0.36;
+    vec2 i0 = floor(g);
+    vec2 f0 = fract(g);
+    float d1 = 8.0;
+    float d2 = 8.0;
+    vec2 id = i0;
+    for (int j = -1; j <= 1; j++) {
+      for (int i = -1; i <= 1; i++) {
+        vec2 o = vec2(float(i), float(j));
+        vec2 pt = o + 0.15 + 0.7 * vec2(tHash(i0 + o), tHash(i0 + o + 17.3));
+        float d = length((f0 - pt) * vec2(1.0, 1.35));
+        if (d < d1) {
+          d2 = d1;
+          d1 = d;
+          id = i0 + o;
+        } else if (d < d2) d2 = d;
+      }
+    }
+    float h = tHash(id);
+    col = base * (0.7 + 0.42 * h) * (0.9 + 0.2 * tNoise(uv * 7.0));
+    col = repaired(col, id, param);
+    col = mix(base * vec3(0.55, 0.53, 0.5), col, mix(1.0, smoothstep(0.03, 0.1 + fw * 2.0, d2 - d1), detail));
+    col = wallPatina(col, uv, param);
+    tRough = 0.9;
+  } else if (t == 23) {
+    // carved wooden lattice over a dark opening (glows at night)
+    vec2 q = uv * 6.0;
+    float a = abs(fract((q.x + q.y) * 0.5) - 0.5);
+    float b = abs(fract((q.x - q.y) * 0.5) - 0.5);
+    float wood = 1.0 - smoothstep(0.07 - fw * 3.0, 0.1 + fw * 3.0, min(a, b));
+    col = mix(vec3(0.03, 0.022, 0.018), base * (0.8 + 0.3 * tNoise(uv * 20.0)), mix(0.6, wood, detail));
+    tEmit = 1.0 - wood;
+    tRough = 0.8;
+  } else if (t == 24) {
+    // oiled-skin or mica panes in a leaded grid (warm glow at night)
+    vec2 q = fract(uv / vec2(0.2, 0.2));
+    float lead = min(min(q.x, 1.0 - q.x), min(q.y, 1.0 - q.y));
+    col = vec3(0.52, 0.36, 0.15) * (0.75 + 0.35 * tNoise(uv * 7.0));
+    col = mix(vec3(0.08, 0.07, 0.06), col, mix(1.0, smoothstep(0.03, 0.07 + fw * 3.0, lead), detail));
+    tEmit = 0.7;
+    tRough = 0.3;
+  } else if (t == 25) {
+    // copper sheet: bright when new, verdigris with age (param)
+    float v = smoothstep(0.25, 0.85, param + 0.35 * (tNoise(uv * 0.9) - 0.5));
+    col = mix(vec3(0.72, 0.38, 0.2), vec3(0.28, 0.6, 0.5), v) * (0.85 + 0.25 * tNoise(uv * 4.0));
+    float seam = abs(fract(uv.x / 0.6) - 0.5);
+    col *= 1.0 - 0.25 * smoothstep(0.44, 0.49, seam) * detail;
+    tMetal = 0.85 * (1.0 - v);
+    tRough = mix(0.35, 0.75, v);
   }
   return col;
 }

@@ -9,12 +9,16 @@
 // every house faces the path it stands on.
 
 import { Rng, seedFor } from '../core/rng';
-import type { CanalDef, TownSite } from '../world/gen/settlements';
+import { WALL_INSET, type CanalDef, type TownSite } from '../world/gen/settlements';
+import { frontDoorX } from './kit';
+import { canalWallLines } from './props';
 import { Hash2, obbCorners, obbOverlap, obbRadius, pointSegDist, polyLength, resample, segCross, segObbDist, smooth, type OBB, type P2 } from './geom';
 
 export type District = 'waterfront' | 'market' | 'craft' | 'residential' | 'civic' | 'university' | 'mill' | 'edge';
 export type BuildingKind =
   | 'house'
+  | 'cottage'
+  | 'townhouse'
   | 'burrow'
   | 'warehouse'
   | 'tavern'
@@ -26,8 +30,16 @@ export type BuildingKind =
   | 'university'
   | 'mill'
   | 'boathouse'
-  | 'shrine';
+  | 'shrine'
+  | 'markethall'
+  | 'singinghall'
+  | 'bathhouse'
+  | 'outpost';
 export type RoofKind = 'thatch' | 'tile' | 'shingle' | 'slate' | 'turf' | 'dome' | 'flat';
+/** Plinth and ground floor stone (docs/ARCHITECTURE_SPEC.md section 4). */
+export type BaseStone = 'riverstone' | 'fieldstone' | 'ashlar';
+/** Upper floors: wattle and daub, timber frame with plaster infill, or stone. */
+export type UpperWall = 'daub' | 'timberPlaster' | 'stone';
 
 export interface Building {
   a: number;
@@ -47,7 +59,20 @@ export interface Building {
   waterDoor: boolean;
   sunken: boolean;
   tower: boolean;
+  /** Decoration density 0.2..1, from wealth and district (spec 6). */
+  deco: number;
+  /** 0 new .. 1 ancient: moss, rising damp, repairs, faded paint (spec 5). */
+  age: number;
+  base: BaseStone;
+  upper: UpperWall;
+  /** A railed lookout platform on the roof (spec 5). */
+  lookout: boolean;
+  /** Faces water across the quay or a canal walk: it gets a drip porch (spec 3). */
+  wet: boolean;
 }
+
+/** Placeholder parameters, set properly by `dress` once a bank is laid out. */
+const UNDRESSED = { deco: 0.5, age: 0.5, base: 'fieldstone', upper: 'timberPlaster', lookout: false, wet: false } as const satisfies Partial<Building>;
 
 export interface Rect {
   a0: number;
@@ -94,6 +119,35 @@ export interface Bridge {
   rot: number;
   span: number;
   width: number;
+}
+
+/**
+ * A slipway: a worn stone ramp down into the water (1:6), built against a
+ * waterside wall on its water side. Public ones have a flight of steps
+ * beside the ramp (spec 2: a ramp beside every stair).
+ */
+export interface Slipway {
+  /** Top end, on the wall line. */
+  a: number;
+  c: number;
+  /** Downhill direction along the wall (unit). */
+  ua: number;
+  uc: number;
+  /** Out over the water (unit). */
+  na: number;
+  nc: number;
+  len: number;
+  width: number;
+  steps: boolean;
+}
+
+/** An underwater door in a waterside wall (spec 2: 1.0 x 0.9 m, its top 0.3 m below the water). */
+export interface WaterDoor {
+  a: number;
+  c: number;
+  /** Out over the water (unit). */
+  na: number;
+  nc: number;
 }
 
 export interface Statue {
@@ -159,6 +213,8 @@ export interface BankLayout {
   moorings: Mooring[];
   walls: WallSeg[];
   racks: { a: number; c: number; rot: number }[];
+  slips: Slipway[];
+  waterDoors: WaterDoor[];
   /** Vegetable plots behind houses. */
   gardens: OBB[];
   basins: Rect[];
@@ -181,7 +237,6 @@ export interface TownLayout {
 
 const TAU = Math.PI * 2;
 const wrapAngle = (t: number) => t - TAU * Math.round(t / TAU);
-const ROOFS_TOWN: RoofKind[] = ['tile', 'tile', 'tile', 'shingle', 'shingle', 'thatch', 'slate'];
 const STATUES = ['quinlan', 'fish', 'otter', 'flow', 'singers'] as const;
 
 // ---------------------------------------------------------------------------
@@ -409,9 +464,15 @@ class Plan {
     this.obs.add(o, o.a, o.c, obbRadius(o));
   }
 
+  /** Taverns, the watch house and the civic hall placed so far. */
+  readonly n: Counters = { tavern: 0, watch: false, civic: false };
+
   addBuilding(b: Building) {
     this.B.buildings.push(b);
     this.addObstacle(obbOf(b));
+    if (b.kind === 'tavern') this.n.tavern++;
+    else if (b.kind === 'watch') this.n.watch = true;
+    else if (b.kind === 'civic') this.n.civic = true;
   }
 
   /** Distance from a point to the nearest path edge (negative on a path). */
@@ -616,74 +677,82 @@ interface Counters {
 
 type Spec = Omit<Building, 'a' | 'c' | 'rot' | 'seed' | 'sunken'>;
 
-function specFor(rng: Rng, district: District, waterfront: boolean, city: boolean, n: Counters): Spec {
-  let w: number;
-  let d = rng.range(8, 12.5);
-  let kind: BuildingKind = 'house';
-  let floors = rng.chance(0.55) ? 2 : 1;
-  let roof: RoofKind = rng.pick(ROOFS_TOWN);
-  let mural = false;
-  let tower = false;
+/** Roofs by tier (spec 4): tile and shingle in towns, tile and slate in cities. */
+const ROOFS_TOWN: RoofKind[] = ['tile', 'tile', 'tile', 'shingle', 'shingle', 'thatch'];
+const ROOFS_CITY: RoofKind[] = ['tile', 'tile', 'tile', 'slate', 'slate', 'shingle'];
+
+/**
+ * What to build at a spot, from the building catalogue (spec 7; sizes are
+ * frontage x depth). `core`: the packed, cobbled old town.
+ */
+function specFor(rng: Rng, district: District, waterfront: boolean, city: boolean, core: boolean, n: Counters): Spec {
+  const roofs = city ? ROOFS_CITY : ROOFS_TOWN;
+  const mk = (kind: BuildingKind, w: number, d: number, floors: number, roof: RoofKind = rng.pick(roofs), mural = false, tower = false): Spec => ({
+    ...UNDRESSED,
+    kind,
+    w,
+    d,
+    floors,
+    roof,
+    district,
+    mural,
+    waterDoor: false,
+    tower,
+  });
   const maxTav = city ? 8 : 3;
-  if (waterfront && rng.chance(city ? 0.4 : 0.3)) {
-    kind = 'warehouse';
-    w = rng.range(16, 28);
-    d = rng.range(13, 18);
-    floors = 2;
-    roof = 'tile';
-    mural = rng.chance(0.75);
-  } else if (waterfront && rng.chance(0.18) && n.tavern < maxTav) {
-    n.tavern++;
-    kind = 'tavern';
-    w = rng.range(12, 18);
-    floors = 2;
-    mural = rng.chance(0.5);
+  const tavern = () => mk('tavern', rng.range(12, 14), rng.range(9, 10.5), 2, rng.pick(roofs), rng.chance(0.5));
+  // narrow end to the lane, two or three floors (a shop at street level for shops)
+  const townhouse = (kind: BuildingKind = 'townhouse') => mk(kind, rng.range(5.2, 6.8), rng.range(9, 11), rng.chance(0.6) ? 2 : 3);
+  const house = () => mk('house', rng.range(7, 10), rng.range(6.5, 9), rng.chance(0.5) ? 2 : 1);
+  const cottage = () => mk('cottage', rng.range(7.5, 9), rng.range(5.5, 6.5), 1, rng.chance(city ? 0.2 : 0.5) ? 'thatch' : rng.pick(roofs));
+  let s: Spec;
+  if (waterfront) {
+    const r = rng.next();
+    if (r < (city ? 0.4 : 0.3)) s = mk('warehouse', rng.range(22, 27), rng.range(11, 13), 2, 'tile', rng.chance(0.75));
+    else if (r < (city ? 0.52 : 0.45) && n.tavern < maxTav) s = tavern();
+    else s = rng.chance(0.5) ? townhouse() : house();
   } else if (district === 'market') {
-    kind = rng.chance(0.25) && n.tavern < maxTav ? 'tavern' : 'shop';
-    if (kind === 'tavern') n.tavern++;
-    w = rng.range(8, 14);
-    floors = rng.chance(0.7) ? 2 : 3;
+    const r = rng.next();
+    s = r < 0.2 && n.tavern < maxTav ? tavern() : r < 0.75 ? townhouse('shop') : townhouse();
   } else if (district === 'craft') {
-    kind = 'workshop';
-    w = rng.range(9, 15);
-    floors = rng.chance(0.6) ? 1 : 2;
-    roof = rng.chance(0.5) ? 'shingle' : 'tile';
+    s = rng.chance(0.7) ? mk('workshop', rng.range(8, 10), rng.range(6, 7), 1, rng.chance(0.5) ? 'shingle' : 'tile') : house();
   } else if (district === 'university') {
-    kind = 'university';
-    w = rng.range(18, 30);
-    d = 16;
-    floors = 3;
-    roof = 'slate';
-    mural = true;
+    s = mk('university', rng.range(20, 30), 16, 3, 'slate', true);
   } else if (district === 'edge') {
-    kind = rng.chance(0.35) ? 'burrow' : 'house';
-    w = rng.range(7, 11);
-    d = rng.range(7, 10);
-    if (kind === 'burrow') floors = 1;
-    roof = kind === 'burrow' ? 'turf' : rng.chance(0.4) ? 'thatch' : roof;
+    const r = rng.next();
+    s = r < 0.3 ? mk('burrow', rng.range(5, 6.5), rng.range(5.5, 7), 1, 'turf') : r < 0.8 ? cottage() : house();
   } else {
-    w = rng.range(7, 12.5);
+    s = core ? (rng.chance(0.5) ? townhouse() : house()) : rng.chance(0.4) ? cottage() : house();
   }
-  if (!n.watch && rng.chance(0.03)) {
-    n.watch = true;
-    kind = 'watch';
-    tower = true;
-    w = 8;
-    d = 8;
-    floors = 3;
-    roof = 'tile';
+  if (!n.watch && rng.chance(0.03)) s = mk('watch', 8, 10, 2, 'tile', false, true);
+  if (city && district === 'market' && !n.civic && rng.chance(0.05)) s = mk('civic', 30, 20, 3, 'dome', true, true);
+  if (!s.mural) s.mural = rng.chance(0.1) && s.floors >= 2;
+  return s;
+}
+
+/** How much each district spends on decoration (spec 6), before the town's tier. */
+const WEALTH: Record<District, number> = { civic: 0.95, university: 0.85, market: 0.72, waterfront: 0.6, residential: 0.45, craft: 0.4, mill: 0.38, edge: 0.3 };
+
+/**
+ * Settle each building's decoration, age and materials (spec 4, 6, 9) once a
+ * bank is laid out: wealth from district and tier, age from distance to the
+ * oldest part of town (the quay by the market), materials from both.
+ */
+function dress(B: BankLayout, tier: TownSite['kind'], oldest: P2, reach: number, seed: number) {
+  const rng = new Rng(seedFor(seed, `dress${B.side}`));
+  const clamp = (x: number, lo: number, hi: number) => (x < lo ? lo : x > hi ? hi : x);
+  for (const b of B.buildings) {
+    const d = Math.hypot((b.a - oldest[0]) * 0.7, b.c - oldest[1]);
+    b.age = clamp(0.2 + 0.7 * Math.max(0, 1 - d / reach) + rng.range(-0.15, 0.15), 0.05, 1);
+    const wealth = WEALTH[b.district] + (tier === 'city' ? 0.1 : tier === 'hamlet' ? -0.15 : 0) - (b.kind === 'burrow' ? 0.08 : 0);
+    b.deco = clamp(wealth + rng.range(-0.15, 0.15), 0.2, 1);
+    const rich = b.deco > 0.68;
+    b.base = tier === 'hamlet' || b.district === 'edge' ? 'riverstone' : rich && tier === 'city' ? 'ashlar' : 'fieldstone';
+    b.upper = tier === 'hamlet' || b.district === 'edge' ? 'daub' : rich && tier === 'city' && rng.chance(0.45) ? 'stone' : 'timberPlaster';
+    b.lookout = b.floors >= 2 && b.w * b.d > 130 && b.kind !== 'civic' && b.kind !== 'university' && rng.chance(tier === 'city' ? 0.3 : 0.15);
+    // the largest, richest walls are painted
+    if (!b.mural && b.deco > 0.82 && b.floors >= 2 && b.w >= 9) b.mural = rng.chance(0.5);
   }
-  if (city && district === 'market' && !n.civic && rng.chance(0.05)) {
-    n.civic = true;
-    kind = 'civic';
-    w = 30;
-    d = 20;
-    floors = 3;
-    roof = 'dome';
-    tower = true;
-    mural = true;
-  }
-  return { w, d, kind, floors, roof, district, mural: mural || (rng.chance(0.1) && floors >= 2), waterDoor: false, tower };
 }
 
 interface LineOpts {
@@ -693,6 +762,8 @@ interface LineOpts {
   gap: [number, number] | ((a: number, c: number) => [number, number]);
   /** Random twist (radians). */
   jit?: number;
+  /** The line is a waterside (quay or canal walk): these houses get a drip porch. */
+  wet?: boolean;
   after?: (b: Building) => void;
 }
 
@@ -717,7 +788,7 @@ function lineUp(P: Plan, rng: Rng, pts: P2[], hw: number, side: 1 | -1, pick: (a
     const a = p[0] - side * t[1] * off;
     const c = p[1] + side * t[0] * off;
     const rot = Math.atan2(side * t[1], side * t[0]) + (o.jit ? rng.range(-o.jit, o.jit) : 0);
-    const b: Building = { ...sp, a, c, rot, seed: rng.int(0, 1e9), sunken: sp.kind === 'burrow' };
+    const b: Building = { ...sp, a, c, rot, seed: rng.int(0, 1e9), sunken: sp.kind === 'burrow', wet: !!o.wet };
     if (P.fits(obbOf(b))) {
       P.addBuilding(b);
       o.after?.(b);
@@ -835,6 +906,8 @@ function emptyBank(side: 1 | -1): BankLayout {
     moorings: [],
     walls: [],
     racks: [],
+    slips: [],
+    waterDoors: [],
     gardens: [],
     basins: [],
     market: null,
@@ -925,13 +998,35 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     waterDoor: false,
     sunken: false,
     tower: city,
+    ...UNDRESSED,
   };
   const hallOk = P.fits(obbOf(hall));
   if (hallOk) P.reserved.push(obbOf(hall));
 
+  // ---- the amphitheatre (cities) sits on the waterfront with the river
+  // behind its stage (spec 7)
+  const cents: Centre[] = [M];
+  if (city && primary) {
+    const r = rng.range(30, 36);
+    const ac = quayW + r * 0.3 + 2;
+    const sgn = rng.sign();
+    for (let k = 0; k < 24; k++) {
+      const a = sgn * (k % 2 ? -1 : 1) * L * (0.62 - 0.03 * Math.floor(k / 2));
+      if (Math.abs(a) > L - r - 25 || Math.abs(a - mA) < ra + r + 60) continue;
+      let dry = true;
+      for (let i = 0; i < 16 && dry; i++) {
+        const t = (i / 16) * Math.PI;
+        if (water.gap(a + Math.cos(t) * (r + 10), ac + Math.sin(t) * (r + 10)) < 6 || water.gap(a + Math.cos(t) * (r + 10), quayW + 2) < 6) dry = false;
+      }
+      if (!dry || (hallOk && obbPointDist(obbOf(hall), a, ac) < r + 25)) continue;
+      cents.push(commons(rng, a, ac, r * 2.2, r + 4, 'amph', 'amph'));
+      B.amphitheater = { a, c: ac, r };
+      break;
+    }
+  }
+
   // ---- neighbourhood centres, scattered like old village cores
   const S = city ? 126 : 100;
-  const cents: Centre[] = [M];
   for (let k = 0; k < 6000; k++) {
     const sp = S * rng.range(0.85, 1.2);
     const a = rng.range(-L + sp * 0.3, L - sp * 0.3);
@@ -941,18 +1036,8 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     if (hallOk && obbPointDist(obbOf(hall), a, c) < 30) continue;
     cents.push(commons(rng, a, c, sp / 2, city ? rng.range(7.5, 12) : rng.range(6.5, 10.5), 'commons', 'commons'));
   }
-  // the amphitheatre and the university each take over one quarter (cities)
+  // the university takes over one quarter (cities)
   if (city && primary) {
-    const r = rng.range(32, 44);
-    const want: P2 = [rng.chance(0.5) ? -L * 0.62 : L * 0.62, D * 0.72];
-    const cand = cents.filter((q) => q.kind === 'commons' && q.c + r < D - 12 && water.gap(q.a, q.c) > r + 8);
-    cand.sort((p, q) => Math.hypot(p.a - want[0], p.c - want[1]) - Math.hypot(q.a - want[0], q.c - want[1]));
-    if (cand.length) {
-      const i = cents.indexOf(cand[0]);
-      const q = cents[i];
-      cents[i] = commons(rng, q.a, q.c, q.w, r + 4, 'amph', 'amph');
-      B.amphitheater = { a: q.a, c: q.c, r };
-    }
     const uni = cents.filter((q) => q.kind === 'commons' && q.c > D * 0.3 && q.c < D * 0.8 && Math.abs(q.a) < L * 0.75 && Math.hypot(q.a - mA, q.c - mC) > 160 && water.gap(q.a, q.c) > 40);
     if (uni.length) {
       const q = rng.pick(uni);
@@ -1227,7 +1312,8 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   }
 
   // ---- buildings
-  const n: Counters = { tavern: 0, watch: false, civic: city };
+  const n = P.n;
+  n.civic = city;
   if (hallOk) {
     P.reserved.length = 0;
     P.addBuilding(hall);
@@ -1254,28 +1340,32 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
       waterDoor: true,
       sunken: false,
       tower: false,
+      ...UNDRESSED,
+      wet: true,
     };
     if (P.fits(obbOf(m), 0.25, 0.3, 0)) P.addBuilding(m);
   }
-  const districtAt = (a: number, c: number): District => cents[owner(a, c)].district;
-  const pickAt = (set: 'water' | 'path') => (a: number, c: number) => (set === 'water' ? specFor(rng, 'waterfront', true, city, n) : specFor(rng, districtAt(a, c), false, city, n));
+  const pickAt = (set: 'water' | 'path') => (a: number, c: number) => {
+    const q = cents[owner(a, c)];
+    return set === 'water' ? specFor(rng, 'waterfront', true, city, q.paving === 'cobble', n) : specFor(rng, q.district, false, city, q.paving === 'cobble', n);
+  };
   const yard = (b: Building) => gardenBehind(P, rng, b, b.district === 'edge' ? 0.35 : b.district === 'residential' ? 0.2 : 0.08);
   // terraces in the old core, detached houses with yards further out
   const spacing = (tight: [number, number], loose: [number, number]) => (a: number, c: number) => (cents[owner(a, c)].paving === 'cobble' ? tight : loose);
   // round the market, then the university quad, then along the main paths
-  lineUp(P, rng, [...mRimPts, mRimPts[0]], 0, -1, () => specFor(rng, 'market', false, city, n), { set: [0.8, 1.6], gap: [0.2, 0.8] });
-  for (const q of cents) if (q.kind === 'quad') lineUp(P, rng, [...q.plaza.rim, q.plaza.rim[0]], 0, -1, () => specFor(rng, 'university', false, city, n), { set: [1, 2], gap: [1, 4] });
+  lineUp(P, rng, [...mRimPts, mRimPts[0]], 0, -1, () => specFor(rng, 'market', false, city, true, n), { set: [0.8, 1.6], gap: [0.2, 0.8] });
+  for (const q of cents) if (q.kind === 'quad') lineUp(P, rng, [...q.plaza.rim, q.plaza.rim[0]], 0, -1, () => specFor(rng, 'university', false, city, true, n), { set: [1, 2], gap: [1, 4] });
   const mains = B.paths.filter((p) => p.kind === 'main');
   const walks = B.paths.filter((p) => p.kind === 'canalwalk');
   const lanes = B.paths.filter((p) => p.kind === 'lane');
-  for (const p of mains) for (const sd of [1, -1] as const) lineUp(P, rng, p.pts, p.width / 2, sd, pickAt('path'), { set: [0.6, 1.8], gap: spacing([0.3, 2.5], [3, 9]), after: yard });
-  for (const p of walks) for (const sd of [1, -1] as const) lineUp(P, rng, p.pts, p.width / 2, sd, pickAt('path'), { set: [0.5, 1.2], gap: [0.2, 1.5] });
+  for (const p of mains) for (const sd of [1, -1] as const) lineUp(P, rng, p.pts, p.width / 2, sd, pickAt('path'), { set: [0.6, 1.8], gap: spacing([0.3, 2.5], [4, 11]), after: yard });
+  for (const p of walks) for (const sd of [1, -1] as const) lineUp(P, rng, p.pts, p.width / 2, sd, pickAt('path'), { set: [0.5, 1.2], gap: [0.2, 1.5], wet: true });
   // the waterfront row faces the river across the quay
-  lineUp(P, rng, resample([[-L, quayW], [L, quayW]], 3), 0, 1, pickAt('water'), { set: [0.4, 1.4], gap: [0.3, 2] });
+  lineUp(P, rng, resample([[-L, quayW], [L, quayW]], 3), 0, 1, pickAt('water'), { set: [0.4, 1.4], gap: [0.3, 2], wet: true });
   // round the commons, then along the lanes
   for (const q of cents) if (q.kind === 'commons') lineUp(P, rng, [...q.plaza.rim, q.plaza.rim[0]], 0, -1, pickAt('path'), { set: [0.8, 2.2], gap: spacing([0.4, 2.5], [1.5, 5]), after: yard });
   for (const p of lanes)
-    for (const sd of [1, -1] as const) lineUp(P, rng, p.pts, p.width / 2, sd, pickAt('path'), p.paving === 'cobble' ? { set: [0.4, 1.5], gap: [0.3, 3], jit: 0.04, after: yard } : { set: [0.8, 3], gap: [4, 12], jit: 0.08, after: yard });
+    for (const sd of [1, -1] as const) lineUp(P, rng, p.pts, p.width / 2, sd, pickAt('path'), p.paving === 'cobble' ? { set: [0.4, 1.5], gap: [0.3, 3], jit: 0.04, after: yard } : { set: [0.8, 3], gap: [5, 15], jit: 0.08, after: yard });
 
   // ---- the market: fountain, stalls in rings, a bathing pool, statues and shade trees
   const fr = city ? 7 : 4.5;
@@ -1390,9 +1480,104 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     B.statues.push({ a, c: quayW - 2, rot: Math.PI, kind: rng.pick(['fish', 'otter', 'flow', 'quinlan'] as const), scale: rng.range(1, 1.4), seed: rng.int(0, 1e9), plinth: 1 });
   }
 
+  // ---- ways down into the water (spec 3 and 8)
+  placeSlipways(B, site, rng, water, canals, quayW);
+
   // ---- trees in the yards and verges
   yardTrees(P, trng, quayW + 3, 11, city ? 0.6 : 0.66);
+  dress(B, site.kind, [mA, quayW], Math.max(L * 0.7, D), site.seed);
   return B;
+}
+
+/**
+ * Public water stairs where lanes come down to the quay and every ~120 m
+ * along it; a slipway at the door of each house on the water, or an
+ * underwater door when there is no room for one; public slipways along the
+ * canals. Everything runs along the waterside walls, on their water side.
+ */
+function placeSlipways(B: BankLayout, site: TownSite, rng: Rng, water: Water, canals: CanalDef[], quayW: number) {
+  const L = site.halfLen;
+  const len = 6 * (site.level - site.waterLevel + 0.85); // 1:6 (spec 2)
+  interface Run {
+    pts: P2[];
+    cum: number[];
+    quay: boolean;
+    taken: [number, number][];
+  }
+  const mkRun = (pts: P2[], quay: boolean): Run => {
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    return { pts, cum, quay, taken: [] };
+  };
+  const quay = mkRun(resample([[-L, -WALL_INSET], [L, -WALL_INSET]], 2), true);
+  const runs: Run[] = [quay];
+  for (const cn of canals) for (const wall of canalWallLines(cn.pts, cn.width, WALL_INSET, -WALL_INSET)) runs.push(mkRun(resample(wall, 2), false));
+  const at = (R: Run, s: number): { p: P2; u: P2 } => {
+    let i = 1;
+    while (i < R.cum.length - 1 && R.cum[i] < s) i++;
+    const p0 = R.pts[i - 1];
+    const p1 = R.pts[i];
+    const l = R.cum[i] - R.cum[i - 1] || 1;
+    const t = Math.max(0, Math.min(1, (s - R.cum[i - 1]) / l));
+    return { p: [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t], u: [(p1[0] - p0[0]) / l, (p1[1] - p0[1]) / l] };
+  };
+  // out over the water: the quay faces the river; canal walls have the water on their left
+  const outOf = (R: Run, u: P2): P2 => (R.quay ? [0, -1] : [-u[1], u[0]]);
+  const blocked = (R: Run, p: P2) =>
+    (R.quay ? water.gap(p[0], quayW * 0.5) < 1.5 || B.piers.some((q) => Math.abs(q.a - p[0]) < q.width / 2 + 2) : p[1] < quayW + 4) ||
+    B.bridges.some((br) => Math.hypot(p[0] - br.a, p[1] - br.c) < br.span / 2 + br.width / 2 + 3);
+  const free = (R: Run, s0: number, s1: number, pad: number) => !R.taken.some(([t0, t1]) => s1 > t0 - pad && s0 < t1 + pad);
+  const slip = (R: Run, s: number, width: number, steps: boolean): boolean => {
+    for (const dir of rng.chance(0.5) ? [1, -1] : [-1, 1]) {
+      const s0 = dir > 0 ? s : s - len;
+      const s1 = dir > 0 ? s + len : s;
+      if (s0 < 2 || s1 > R.cum[R.cum.length - 1] - 2 || !free(R, s0, s1, 3)) continue;
+      const u0 = at(R, s0).u;
+      let ok = true;
+      for (let x = s0; x <= s1 && ok; x += 2) {
+        const { p, u } = at(R, x);
+        if (blocked(R, p) || u[0] * u0[0] + u[1] * u0[1] < 0.985) ok = false;
+      }
+      if (!ok) continue;
+      R.taken.push([s0, s1]);
+      const top = at(R, s);
+      const [na, nc] = outOf(R, top.u);
+      B.slips.push({ a: top.p[0], c: top.p[1], ua: top.u[0] * dir, uc: top.u[1] * dir, na, nc, len, width, steps });
+      return true;
+    }
+    return false;
+  };
+  // public water stairs where lanes come down to the quay, then every ~120 m
+  for (const p of B.paths) {
+    const e = p.pts[p.pts.length - 1];
+    if (p.kind === 'main' && e[1] < quayW) slip(quay, e[0] + L, 3.0, true);
+  }
+  for (let a = -L + 60; a < L - 60; a += 120) if (free(quay, a + L - 60, a + L + 60, 0)) slip(quay, a + L + rng.range(-20, 20), 3.0, true);
+  // a slipway at the door of each house on the water, or else an underwater door
+  for (const b of B.buildings) {
+    if (!b.wet || b.kind === 'mill') continue;
+    const dx = frontDoorX(b);
+    const da = b.a + dx * Math.cos(b.rot);
+    const dc = b.c + dx * Math.sin(b.rot);
+    let best: { R: Run; s: number; d: number } | null = null;
+    for (const R of runs) {
+      for (let i = 0; i < R.pts.length; i++) {
+        const d = Math.hypot(R.pts[i][0] - da, R.pts[i][1] - dc);
+        if (!best || d < best.d) best = { R, s: R.cum[i], d };
+      }
+    }
+    if (!best || best.d > (best.R.quay ? quayW + 8 : 12)) continue;
+    if (rng.chance(0.75) && slip(best.R, best.s, rng.range(1.2, 2.0), false)) continue;
+    const { p, u } = at(best.R, best.s);
+    if (!free(best.R, best.s - 1, best.s + 1, 1.5) || blocked(best.R, p)) continue;
+    const [na, nc] = outOf(best.R, u);
+    B.waterDoors.push({ a: p[0], c: p[1], na, nc });
+    best.R.taken.push([best.s - 1, best.s + 1]);
+  }
+  // public slipways along the canals
+  for (const R of runs) if (!R.quay) for (let s = 30; s < R.cum[R.cum.length - 1] - 30; s += 70) slip(R, s + rng.range(-10, 10), 1.8, false);
+  // no barge moored stern-in across a slipway
+  B.moorings = B.moorings.filter((m) => m.rot !== 0 || !B.slips.some((sl) => sl.nc < -0.9 && Math.abs(m.a - (sl.a + (sl.ua * sl.len) / 2)) < sl.len / 2 + 6));
 }
 
 // ---------------------------------------------------------------------------
@@ -1480,6 +1665,7 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
     if (B.buildings.length >= n) return null;
     const burrow = rng.chance(c < 40 ? 0.65 : 0.35);
     return {
+      ...UNDRESSED,
       w: burrow ? rng.range(6, 9) : rng.range(6, 10),
       d: burrow ? rng.range(6, 8) : rng.range(6, 9),
       kind: burrow ? 'burrow' : 'house',
@@ -1504,7 +1690,7 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
     P.addBuilding(b);
     yard(b);
   }
-  B.buildings.push({ a: ba, c: 2, w: 8, d: 9, rot: 0, floors: 1, kind: 'boathouse', roof: 'thatch', district: 'waterfront', seed: rng.int(0, 1e9), mural: false, waterDoor: true, sunken: false, tower: false });
+  B.buildings.push({ ...UNDRESSED, a: ba, c: 2, w: 8, d: 9, rot: 0, floors: 1, kind: 'boathouse', roof: 'thatch', district: 'waterfront', seed: rng.int(0, 1e9), mural: false, waterDoor: true, sunken: false, tower: false, wet: true });
 
   // trees (own random stream: the rest of the hamlet stays the same)
   const trng = new Rng(seedFor(site.seed, `hamletTrees${side}`));
@@ -1513,5 +1699,6 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
     B.trees.push({ a: gA + Math.cos(t) * G.plaza.r * 0.7, c: gC + Math.sin(t) * G.plaza.r * 0.7, scale: trng.range(0.8, 1.1), type: 0 });
   }
   yardTrees(P, trng, 11, 9, 0.5);
+  dress(B, 'hamlet', [B.dock.a, 0], Math.max(L, D) * 0.9, site.seed);
   return B;
 }

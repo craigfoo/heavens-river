@@ -24,16 +24,40 @@ export const SURF = {
   halftimber: 18,
   bronze: 19,
   flags: 20,
+  ashlar: 21,
+  fieldstone: 22,
+  lattice: 23,
+  mica: 24,
+  copper: 25,
 } as const;
+
+/**
+ * `param` codes that weather a wall (stone, fieldstone, ashlar, plaster,
+ * half-timbering): 3 + age (0..1) for building walls, whose surface v runs
+ * up from the foot of the wall; 5 + v of the waterline for waterside walls.
+ */
+export const wallAge = (age: number) => 3 + Math.min(0.999, Math.max(0, age));
+export const waterline = (v: number) => 5 + v;
 
 export type V3 = [number, number, number];
 
+function grown<T extends Float32Array | Uint32Array>(a: T, need: number): T {
+  let n = a.length;
+  while (n < need) n *= 2;
+  const b = new (a.constructor as { new (n: number): T })(n);
+  b.set(a);
+  return b;
+}
+
 export class MeshBuilder {
-  pos: number[] = [];
-  nrm: number[] = [];
-  col: number[] = [];
-  surf: number[] = [];
-  idx: number[] = [];
+  // growable typed storage: vertices (position, normal, colour, surface) and indices
+  private P = new Float32Array(3 * 1024);
+  private N = new Float32Array(3 * 1024);
+  private C = new Float32Array(3 * 1024);
+  private S = new Float32Array(4 * 1024);
+  private I = new Uint32Array(3 * 1024);
+  private nV = 0;
+  private nI = 0;
   // current local transform: origin + rotation about up
   private ox = 0;
   private oh = 0;
@@ -42,7 +66,34 @@ export class MeshBuilder {
   private sr = 0;
 
   get vertexCount() {
-    return this.pos.length / 3;
+    return this.nV;
+  }
+
+  // Views of what has been built so far (they go stale once more is added).
+  get pos(): Float32Array {
+    return this.P.subarray(0, this.nV * 3);
+  }
+  get nrm(): Float32Array {
+    return this.N.subarray(0, this.nV * 3);
+  }
+  get col(): Float32Array {
+    return this.C.subarray(0, this.nV * 3);
+  }
+  get surf(): Float32Array {
+    return this.S.subarray(0, this.nV * 4);
+  }
+  get idx(): Uint32Array {
+    return this.I.subarray(0, this.nI);
+  }
+
+  /** Add a triangle by vertex index. */
+  index(a: number, b: number, c: number) {
+    if (this.nI + 3 > this.I.length) this.I = grown(this.I, this.nI + 3);
+    const I = this.I;
+    I[this.nI] = a;
+    I[this.nI + 1] = b;
+    I[this.nI + 2] = c;
+    this.nI += 3;
   }
 
   /** Set the local frame: origin (a, h, c) and rotation about up. */
@@ -58,29 +109,34 @@ export class MeshBuilder {
     this.frame(0, 0, 0, 0);
   }
 
-  /** Local (x, y, z) -> town frame (a, h, c). */
-  private tx(x: number, y: number, z: number, out: V3): V3 {
-    out[0] = this.ox + x * this.cr - z * this.sr;
-    out[1] = this.oh + y;
-    out[2] = this.oc + x * this.sr + z * this.cr;
-    return out;
-  }
-
-  private tn(x: number, y: number, z: number, out: V3): V3 {
-    out[0] = x * this.cr - z * this.sr;
-    out[1] = y;
-    out[2] = x * this.sr + z * this.cr;
-    return out;
-  }
-
+  /** Add a vertex, given in the local frame (position and normal are carried into the town frame). */
   vertex(p: V3, n: V3, rgb: V3, surf: number, u: number, v: number, param: number): number {
-    this.tx(p[0], p[1], p[2], _p);
-    this.tn(n[0], n[1], n[2], _n);
-    this.pos.push(_p[0], _p[1], _p[2]);
-    this.nrm.push(_n[0], _n[1], _n[2]);
-    this.col.push(rgb[0], rgb[1], rgb[2]);
-    this.surf.push(surf, u, v, param);
-    return this.pos.length / 3 - 1;
+    const i = this.nV;
+    if ((i + 1) * 4 > this.S.length) {
+      this.P = grown(this.P, (i + 1) * 3);
+      this.N = grown(this.N, (i + 1) * 3);
+      this.C = grown(this.C, (i + 1) * 3);
+      this.S = grown(this.S, (i + 1) * 4);
+    }
+    const cr = this.cr;
+    const sr = this.sr;
+    const j = i * 3;
+    this.P[j] = this.ox + p[0] * cr - p[2] * sr;
+    this.P[j + 1] = this.oh + p[1];
+    this.P[j + 2] = this.oc + p[0] * sr + p[2] * cr;
+    this.N[j] = n[0] * cr - n[2] * sr;
+    this.N[j + 1] = n[1];
+    this.N[j + 2] = n[0] * sr + n[2] * cr;
+    this.C[j] = rgb[0];
+    this.C[j + 1] = rgb[1];
+    this.C[j + 2] = rgb[2];
+    const k = i * 4;
+    this.S[k] = surf;
+    this.S[k + 1] = u;
+    this.S[k + 2] = v;
+    this.S[k + 3] = param;
+    this.nV = i + 1;
+    return i;
   }
 
   /**
@@ -97,7 +153,8 @@ export class MeshBuilder {
       const b = this.vertex(p1, n, rgb, surf, u1, v0, param);
       const c = this.vertex(p2, n, rgb, surf, u1, v1, param);
       const d = this.vertex(p3, n, rgb, surf, u0, v1, param);
-      this.idx.push(a, b, c, a, c, d);
+      this.index(a, b, c);
+      this.index(a, c, d);
       return;
     }
     // planar projection onto the face (keeps patterns straight on trapezoids)
@@ -112,7 +169,8 @@ export class MeshBuilder {
     const b = this.vertex(p1, n, rgb, surf, q[1][0], q[1][1], param);
     const c = this.vertex(p2, n, rgb, surf, q[2][0], q[2][1], param);
     const d = this.vertex(p3, n, rgb, surf, q[3][0], q[3][1], param);
-    this.idx.push(a, b, c, a, c, d);
+    this.index(a, b, c);
+    this.index(a, c, d);
   }
 
   tri(p0: V3, p1: V3, p2: V3, rgb: V3, surf: number, param = 0) {
@@ -125,7 +183,7 @@ export class MeshBuilder {
     const a = this.vertex(p0, n, rgb, surf, 0, 0, param);
     const b = this.vertex(p1, n, rgb, surf, lu, 0, param);
     const c = this.vertex(p2, n, rgb, surf, t, hgt, param);
-    this.idx.push(a, b, c);
+    this.index(a, b, c);
   }
 
   /** Axis-aligned box in the local frame; faces: +x -x +y -y +z -z (bottom skipped by default). */
@@ -174,12 +232,13 @@ export class MeshBuilder {
       const B = this.vertex([x + c1 * r0, y0, z + s1 * r0], norm(n1), rgb, surf, u1, 0, param);
       const C = this.vertex([x + c1 * r1, y1, z + s1 * r1], norm(n1), rgb, surf, u1, y1 - y0, param);
       const D = this.vertex([x + c0 * r1, y1, z + s0 * r1], norm(n0), rgb, surf, u0, y1 - y0, param);
-      this.idx.push(A, C, B, A, D, C);
+      this.index(A, C, B);
+      this.index(A, D, C);
       if (cap && r1 > 0.001) {
         const ctr = this.vertex([x, y1, z], [0, 1, 0], rgb, surf, 0, 0, param);
         const e = this.vertex([x + c0 * r1, y1, z + s0 * r1], [0, 1, 0], rgb, surf, c0 * r1, s0 * r1, param);
         const f = this.vertex([x + c1 * r1, y1, z + s1 * r1], [0, 1, 0], rgb, surf, c1 * r1, s1 * r1, param);
-        this.idx.push(ctr, f, e);
+        this.index(ctr, f, e);
       }
     }
   }
@@ -203,7 +262,8 @@ export class MeshBuilder {
         const b = a + 1;
         const c = a + seg + 1;
         const d = c + 1;
-        this.idx.push(a, c, b, b, c, d);
+        this.index(a, c, b);
+        this.index(b, c, d);
       }
   }
 
@@ -227,7 +287,8 @@ export class MeshBuilder {
         const b = a + 1;
         const c = a + seg + 1;
         const d = c + 1;
-        this.idx.push(a, c, b, b, c, d);
+        this.index(a, c, b);
+        this.index(b, c, d);
       }
   }
 
@@ -255,24 +316,31 @@ export class MeshBuilder {
       const c = this.vertex([cx, cy, zz], [0, 0, dir], rgb, surfCaps, cx, cy, param);
       const ids = pts.map(([x, y]) => this.vertex([x, y, zz], [0, 0, dir], rgb, surfCaps, x, y, param));
       for (let i = 0; i < n; i++) {
-        if (dir > 0) this.idx.push(c, ids[i], ids[(i + 1) % n]);
-        else this.idx.push(c, ids[(i + 1) % n], ids[i]);
+        if (dir > 0) this.index(c, ids[i], ids[(i + 1) % n]);
+        else this.index(c, ids[(i + 1) % n], ids[i]);
       }
     }
   }
 
   merge(o: MeshBuilder) {
     const base = this.vertexCount;
-    for (const v of o.pos) this.pos.push(v);
-    for (const v of o.nrm) this.nrm.push(v);
-    for (const v of o.col) this.col.push(v);
-    for (const v of o.surf) this.surf.push(v);
-    for (const i of o.idx) this.idx.push(i + base);
+    const n = o.nV;
+    if ((base + n) * 4 > this.S.length) {
+      this.P = grown(this.P, (base + n) * 3);
+      this.N = grown(this.N, (base + n) * 3);
+      this.C = grown(this.C, (base + n) * 3);
+      this.S = grown(this.S, (base + n) * 4);
+    }
+    this.P.set(o.pos, base * 3);
+    this.N.set(o.nrm, base * 3);
+    this.C.set(o.col, base * 3);
+    this.S.set(o.surf, base * 4);
+    this.nV = base + n;
+    const idx = o.idx;
+    for (let i = 0; i < idx.length; i += 3) this.index(idx[i] + base, idx[i + 1] + base, idx[i + 2] + base);
   }
 }
 
-const _p: V3 = [0, 0, 0];
-const _n: V3 = [0, 0, 0];
 
 export function sub(a: V3, b: V3): V3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];

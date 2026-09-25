@@ -124,7 +124,7 @@ export class Portals {
     g.setAttribute('normal', new BufferAttribute(new Float32Array(mb.nrm), 3));
     g.setAttribute('aColor', new BufferAttribute(col, 4, true));
     g.setAttribute('aSurf', new BufferAttribute(new Float32Array(mb.surf), 4));
-    g.setIndex(mb.idx);
+    g.setIndex(new BufferAttribute(mb.idx.slice(), 1));
     g.computeBoundingSphere();
     const mesh = new Mesh(g, this.material);
     mesh.castShadow = false;

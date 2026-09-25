@@ -2,10 +2,10 @@
 // market stalls, fishing racks, walls, amphitheatre, barges and pavements.
 
 import { Rng } from '../core/rng';
-import { buildBoat, GOLD, PAINT, STONE, TIMBER, WOOD, type Ground } from './kit';
+import { archOutline, buildBoat, DARK, fanFace, GOLD, PAINT, STONE, TIMBER, WOOD, type Ground } from './kit';
 import type { OBB, P2 } from './geom';
-import type { BankLayout, Bridge, Fountain, Pier, Plaza, Rect, Statue, Stall, WallSeg } from './layout';
-import { lin, MeshBuilder, SURF, type V3 } from './meshBuilder';
+import type { BankLayout, Bridge, Fountain, Pier, Plaza, Rect, Slipway, Statue, Stall, WallSeg, WaterDoor } from './layout';
+import { cross, dot, lin, MeshBuilder, sub, SURF, type V3 } from './meshBuilder';
 
 const PAVE = lin('#a89a84');
 const SLAB = lin('#b8aa92');
@@ -100,6 +100,75 @@ export function buildPier(mb: MeshBuilder, p: Pier, ground: Ground, water: numbe
   for (let c = -p.len + 4; c < -2; c += 6) mb.cylinder(hw + 0.1, c, deck - 0.3, deck + 0.6, 0.14, 0.12, 6, lin('#4a3828'), SURF.timber, 0.2);
 }
 
+/** Add a quad turned to face roughly `want`. */
+function facing(mb: MeshBuilder, A: V3, B: V3, C: V3, D: V3, want: V3, rgb: V3, surf: number, param: number) {
+  if (dot(cross(sub(B, A), sub(D, A)), want) >= 0) mb.quad(A, B, C, D, rgb, surf, param);
+  else mb.quad(A, D, C, B, rgb, surf, param);
+}
+
+/** Corners and heights of a slipway's ramp and (if any) its steps, for walkable floors. */
+export function slipwayFloors(sl: Slipway, top: number, bottom: number): { corners: P2[]; h: [number, number, number, number] }[] {
+  const kw = sl.steps ? 1.3 : 0;
+  const P = (s: number, k: number): P2 => [sl.a + sl.ua * s + sl.na * k, sl.c + sl.uc * s + sl.nc * k];
+  const out = [{ corners: [P(0, kw), P(sl.len, kw), P(sl.len, sl.width), P(0, sl.width)], h: [top, bottom, bottom, top] as [number, number, number, number] }];
+  if (sl.steps) {
+    const run = Math.ceil((top - bottom) / 0.12) * 0.4;
+    out.push({ corners: [P(0, 0), P(run, 0), P(run, kw), P(0, kw)], h: [top, bottom, bottom, top] });
+  }
+  return out;
+}
+
+/**
+ * A slipway (spec 3): a worn stone ramp at 1:6 running down beside a
+ * waterside wall into the water, with a low curb along its edge; public
+ * ones have a flight of steps (0.12 m risers, 0.40 m treads) against the
+ * wall beside the ramp.
+ */
+export function buildSlipway(mb: MeshBuilder, sl: Slipway, top: number, water: number, detail: boolean) {
+  mb.resetFrame();
+  const bottom = water - 0.6;
+  const deep = water - 3.6;
+  const kw = sl.steps ? 1.3 : 0;
+  const P = (s: number, k: number, y: number): V3 => [sl.a + sl.ua * s + sl.na * k, y, sl.c + sl.uc * s + sl.nc * k];
+  const up: V3 = [0, 1, 0];
+  const out: V3 = [sl.na, 0, sl.nc];
+  const inward: V3 = [-sl.na, 0, -sl.nc];
+  const down: V3 = [sl.ua, 0, sl.uc];
+  const worn = lin('#a79a86');
+  facing(mb, P(0, kw, top), P(sl.len, kw, bottom), P(sl.len, sl.width, bottom), P(0, sl.width, top), up, worn, SURF.stone, 0.2);
+  facing(mb, P(0, sl.width, top), P(sl.len, sl.width, bottom), P(sl.len, sl.width, deep), P(0, sl.width, deep), out, QUAY_STONE, SURF.stone, 0.13);
+  facing(mb, P(sl.len, kw, bottom), P(sl.len, sl.width, bottom), P(sl.len, sl.width, deep), P(sl.len, kw, deep), down, QUAY_STONE, SURF.stone, 0.13);
+  if (detail) {
+    const cw = 0.22;
+    const k0 = sl.width - cw;
+    facing(mb, P(0, k0, top + 0.2), P(sl.len, k0, bottom + 0.2), P(sl.len, sl.width, bottom + 0.2), P(0, sl.width, top + 0.2), up, SLAB, SURF.stone, 0.6);
+    facing(mb, P(0, k0, top), P(sl.len, k0, bottom), P(sl.len, k0, bottom + 0.2), P(0, k0, top + 0.2), inward, SLAB, SURF.stone, 0.6);
+    facing(mb, P(0, sl.width, top), P(sl.len, sl.width, bottom), P(sl.len, sl.width, bottom + 0.2), P(0, sl.width, top + 0.2), out, SLAB, SURF.stone, 0.6);
+  }
+  if (!sl.steps) return;
+  // the flight falls faster than the ramp: the ramp's inner side shows above the treads
+  facing(mb, P(0, kw, top), P(sl.len, kw, bottom), P(sl.len, kw, deep), P(0, kw, deep), inward, QUAY_STONE, SURF.stone, 0.13);
+  const n = Math.ceil((top - bottom) / 0.12);
+  for (let i = 0; i < n; i++) {
+    const y = top - (i + 1) * 0.12;
+    const s0 = i * 0.4;
+    const s1 = (i + 1) * 0.4;
+    facing(mb, P(s0, 0, y), P(s1, 0, y), P(s1, kw, y), P(s0, kw, y), up, worn, SURF.stone, 0.2);
+    facing(mb, P(s0, 0, y + 0.12), P(s0, kw, y + 0.12), P(s0, kw, y), P(s0, 0, y), down, worn, SURF.stone, 0.2);
+  }
+  const run = n * 0.4;
+  facing(mb, P(run, 0, bottom), P(run, kw, bottom), P(run, kw, deep), P(run, 0, deep), down, QUAY_STONE, SURF.stone, 0.13);
+}
+
+/** An underwater door in a waterside wall (spec 2: 1.0 x 0.9 m, top 0.3 m under), marked by a carved stone above the water. */
+export function buildWaterDoor(mb: MeshBuilder, wd: WaterDoor, water: number, paint: V3) {
+  mb.frame(wd.a, 0, wd.c, Math.atan2(wd.na, -wd.nc));
+  fanFace(mb, archOutline(0, water - 1.2, 1.0, 0.9, 8), 0, water - 0.8, -0.03, DARK, SURF.dark, 0.5);
+  mb.box(-0.45, water + 0.12, -0.14, 0.45, water + 0.48, 0.0, lin('#c8b898'), SURF.stone, SURF.stone, 0.6);
+  mb.box(-0.3, water + 0.2, -0.17, 0.3, water + 0.4, -0.13, paint, SURF.wood, SURF.wood, 1.5);
+  mb.resetFrame();
+}
+
 /** How far a waterside wall's coping reaches back over the bank. */
 export const WALL_LIP = 2.4;
 
@@ -130,28 +199,32 @@ export function buildWaterWall(mb: MeshBuilder, pts: P2[], ground: Ground, water
 }
 
 /**
- * The line of a canal's walls, set `inset` into the water: up one side, round
- * its inland end and back down the other, with the water on the left. Starts
- * and ends where the canal leaves the quay (c = cMin).
+ * The walls of a canal, set `inset` into the water, each as a line with the
+ * water on its left, starting and ending where the canal leaves the quay
+ * (c = cMin). A canal that ends inland has one wall, up one side, round its
+ * end and back down the other; a canal whose both ends reach the river (a
+ * loop) has two, one along each side.
  */
-export function canalWallLine(pts: P2[], width: number, inset: number, cMin: number): P2[] {
+export function canalWallLines(pts: P2[], width: number, inset: number, cMin: number): P2[][] {
   const hw = width / 2 - inset;
   const secs = pathSections(pts, hw);
-  // start where the canal leaves the quay (its mouth is spanned by the quay's own wall)
+  // keep the stretch of a line that lies inland of cMin
   const clip = (line: P2[]): P2[] => {
-    for (let i = 0; i < line.length - 1; i++) {
-      const [a0, c0] = line[i];
-      const [a1, c1] = line[i + 1];
-      if (c1 < cMin) continue;
-      if (c0 >= cMin) return line.slice(i);
-      const t = (cMin - c0) / (c1 - c0);
-      return [[a0 + (a1 - a0) * t, cMin], ...line.slice(i + 1)];
-    }
-    return [];
+    let i0 = 0;
+    while (i0 < line.length - 1 && line[i0 + 1][1] < cMin) i0++;
+    let i1 = line.length - 1;
+    while (i1 > 0 && line[i1 - 1][1] < cMin) i1--;
+    if (i1 <= i0) return [];
+    const out = line.slice(i0, i1 + 1);
+    const cut = (p: P2, q: P2): P2 => (p[1] >= cMin ? p : [p[0] + ((q[0] - p[0]) * (cMin - p[1])) / (q[1] - p[1]), cMin]);
+    out[0] = cut(out[0], out[1]);
+    out[out.length - 1] = cut(out[out.length - 1], out[out.length - 2]);
+    return out;
   };
   const right = clip(secs.map((x) => x.r));
   const left = clip(secs.map((x) => x.l)).reverse();
   const last = pts[pts.length - 1];
+  if (last[1] < 0) return [right, left].filter((l) => l.length > 1);
   const prev = pts[pts.length - 2];
   const l = Math.hypot(last[0] - prev[0], last[1] - prev[1]) || 1;
   // from the right-hand wall round the end to the left-hand one
@@ -161,7 +234,7 @@ export function canalWallLine(pts: P2[], width: number, inset: number, cMin: num
     const th = th0 + (k / 8) * Math.PI;
     cap.push([last[0] + Math.cos(th) * hw, last[1] + Math.sin(th) * hw]);
   }
-  return [...right, ...cap, ...left];
+  return [[...right, ...cap, ...left]];
 }
 
 /** Deck profile of a footbridge: base level (the higher bank), half length and rise of the arch. */
@@ -537,8 +610,11 @@ export function buildPlaza(mb: MeshBuilder, p: Plaza, ground: Ground, rgb: V3, s
     const ring = p.rim.map(([a, c]) => vert(p.a + (a - p.a) * f, p.c + (c - p.c) * f));
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
-      if (k === 1) mb.idx.push(centre, ring[j], ring[i]);
-      else mb.idx.push(prev[i], prev[j], ring[j], prev[i], ring[j], ring[i]);
+      if (k === 1) mb.index(centre, ring[j], ring[i]);
+      else {
+        mb.index(prev[i], prev[j], ring[j]);
+        mb.index(prev[i], ring[j], ring[i]);
+      }
     }
     prev = ring;
   }

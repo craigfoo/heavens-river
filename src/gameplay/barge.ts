@@ -93,7 +93,7 @@ export class BargeJourney {
     g.setAttribute('normal', new BufferAttribute(nrm, 3));
     g.setAttribute('aColor', new BufferAttribute(col, 4, true));
     g.setAttribute('aSurf', new BufferAttribute(new Float32Array(mb.surf), 4));
-    g.setIndex(mb.idx);
+    g.setIndex(new BufferAttribute(mb.idx.slice(), 1));
     g.computeBoundingSphere();
     this.mesh = new Mesh(g, createTownMaterial(false));
     this.mesh.castShadow = true;

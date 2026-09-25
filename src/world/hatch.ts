@@ -171,7 +171,7 @@ export class Hatch {
     g.setAttribute('normal', new BufferAttribute(new Float32Array(mb.nrm), 3));
     g.setAttribute('aColor', new BufferAttribute(col, 4, true));
     g.setAttribute('aSurf', new BufferAttribute(new Float32Array(mb.surf), 4));
-    g.setIndex(mb.idx);
+    g.setIndex(new BufferAttribute(mb.idx.slice(), 1));
     g.computeBoundingSphere();
     const m = new Mesh(g, this.material);
     m.castShadow = true;
@@ -185,7 +185,7 @@ export class Hatch {
     const g = new BufferGeometry();
     g.setAttribute('position', new BufferAttribute(new Float32Array(mb.pos), 3));
     g.setAttribute('color', new BufferAttribute(new Float32Array(mb.col), 3));
-    g.setIndex(mb.idx);
+    g.setIndex(new BufferAttribute(mb.idx.slice(), 1));
     g.computeBoundingSphere();
     return new Mesh(g, this.glowMat);
   }
@@ -225,7 +225,7 @@ export class Hatch {
       uv[i * 2 + 1] = mb.surf[i * 4 + 2];
     }
     g.setAttribute('uv', new BufferAttribute(uv, 2));
-    g.setIndex(mb.idx);
+    g.setIndex(new BufferAttribute(mb.idx.slice(), 1));
     g.computeBoundingSphere();
     return new Mesh(g, this.signMat);
   }

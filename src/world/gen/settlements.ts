@@ -19,6 +19,8 @@ export type TownKind = 'hamlet' | 'town' | 'city';
  */
 export const QUAY_CUT = 3;
 export const BANK_CUT = 2.5;
+/** Waterside walls stand this far out in the water, in front of the terrain's slope into the cut. */
+export const WALL_INSET = 1.2;
 
 export interface CanalDef {
   /** Polyline in town-local (a, c) coordinates. */

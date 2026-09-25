@@ -6,8 +6,8 @@
 import { wrapS } from '../coords/cylinder';
 import { Rng, seedFor } from '../core/rng';
 import { newSample, type WorldGen } from '../world/gen/world';
-import { BANK_CUT, QUAY_CUT, type TownSite } from '../world/gen/settlements';
-import { buildBoathouse, buildBurrow, buildCivic, buildHouse, buildMill, buildTower, buildUniversity, FLOOR_H, type Ground } from './kit';
+import { BANK_CUT, QUAY_CUT, WALL_INSET, type TownSite } from '../world/gen/settlements';
+import { buildBoathouse, buildBurrow, buildCivic, buildHouse, buildMill, buildTower, buildUniversity, FLOOR_H, PAINT, type Ground } from './kit';
 import { pointSegDist, resample, type P2 } from './geom';
 import { generateTownLayout, type Path, type TownLayout } from './layout';
 import { MeshBuilder, SURF, lin } from './meshBuilder';
@@ -15,8 +15,10 @@ import {
   bridgeDeck,
   buildAmphitheater,
   buildBarge,
+  buildSlipway,
+  buildWaterDoor,
   buildWaterWall,
-  canalWallLine,
+  canalWallLines,
   buildFootBridge,
   buildFountain,
   buildGarden,
@@ -34,6 +36,7 @@ import {
   pathStrip,
   PAVE,
   SLAB,
+  slipwayFloors,
   WALL_LIP,
 } from './props';
 
@@ -173,16 +176,20 @@ function finish(mb: MeshBuilder, map: Mapper): TownMesh {
   const surf = new Float32Array(n * 4);
   const side = map.side;
   const cs: Course = { ch: 0, hw: 0, m: 0 };
+  const P = mb.pos;
+  const N = mb.nrm;
+  const C = mb.col;
+  const S = mb.surf;
   for (let i = 0; i < n; i++) {
-    const a = mb.pos[i * 3];
-    const c = mb.pos[i * 3 + 2];
+    const a = P[i * 3];
+    const c = P[i * 3 + 2];
     map.course(a, cs);
     position[i * 3] = wrapS(cs.ch + side * (cs.hw + c) - map.anchorS);
-    position[i * 3 + 1] = mb.pos[i * 3 + 1];
+    position[i * 3 + 1] = P[i * 3 + 1];
     position[i * 3 + 2] = a - map.a0;
-    const n0 = mb.nrm[i * 3];
-    const n1 = mb.nrm[i * 3 + 1];
-    const n2 = mb.nrm[i * 3 + 2];
+    const n0 = N[i * 3];
+    const n1 = N[i * 3 + 1];
+    const n2 = N[i * 3 + 2];
     const ns = side * n2;
     const nz = n0 - side * cs.m * n2;
     const l = 127 / (Math.sqrt(ns * ns + n1 * n1 + nz * nz) || 1);
@@ -191,18 +198,19 @@ function finish(mb: MeshBuilder, map: Mapper): TownMesh {
     normal[i * 4 + 2] = Math.round(nz * l);
     // store colour sRGB-encoded for precision
     for (let k = 0; k < 3; k++) {
-      const v = mb.col[i * 3 + k];
+      const v = C[i * 3 + k];
       color[i * 4 + k] = GAMMA[Math.round((v < 0 ? 0 : v > 1 ? 1 : v) * 4096)];
     }
     color[i * 4 + 3] = 255;
-    for (let k = 0; k < 4; k++) surf[i * 4 + k] = mb.surf[i * 4 + k];
   }
-  const index = new Uint32Array(mb.idx.length);
+  surf.set(S);
+  const I = mb.idx;
+  const index = new Uint32Array(I.length);
   const flip = map.side > 0; // (a, c) -> (s, z) is a reflection on the +s bank
-  for (let t = 0; t < mb.idx.length; t += 3) {
-    index[t] = mb.idx[t];
-    index[t + 1] = flip ? mb.idx[t + 2] : mb.idx[t + 1];
-    index[t + 2] = flip ? mb.idx[t + 1] : mb.idx[t + 2];
+  for (let t = 0; t < I.length; t += 3) {
+    index[t] = I[t];
+    index[t + 1] = flip ? I[t + 2] : I[t + 1];
+    index[t + 2] = flip ? I[t + 1] : I[t + 2];
   }
   return { position, normal, color, surf, index };
 }
@@ -331,7 +339,7 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     // ---- buildings
     for (const b of B.buildings) {
       both(b.a, (mb, detail) => {
-        const o = { detail };
+        const o = { detail, water };
         switch (b.kind) {
           case 'burrow':
             buildBurrow(mb, b, ground, o);
@@ -544,11 +552,24 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
     if (B.side === site.side) {
       for (const cn of site.canals) {
         const a = cn.pts[0][0];
-        const line = resample(canalWallLine(cn.pts, cn.width, WALL_INSET, -WALL_INSET), 4);
-        both(a, (mb) => buildWaterWall(mb, line, ground, water));
-        bankFloors(line);
+        for (const wall of canalWallLines(cn.pts, cn.width, WALL_INSET, -WALL_INSET)) {
+          const line = resample(wall, 4);
+          both(a, (mb) => buildWaterWall(mb, line, ground, water));
+          bankFloors(line);
+        }
       }
     }
+    // ---- slipways, water stairs and underwater doors (the wet threshold, spec 3)
+    for (const sl of B.slips) {
+      const quaySide = sl.nc < -0.9 && sl.c < 0;
+      const top = ground(sl.a - sl.na * 1.5, sl.c - sl.nc * 1.5) + (quaySide ? 0.25 : 0.2);
+      both(sl.a, (mb, detail) => buildSlipway(mb, sl, top, water, detail));
+      for (const f of slipwayFloors(sl, top, water - 0.6)) addFloorQuad(floors, map, f.corners, f.h);
+      const p = map.pos(sl.a + sl.na * 1.5, top, sl.c + sl.nc * 1.5);
+      waypoints.push(p[0], p[2], p[1], 2);
+    }
+    for (const wd of B.waterDoors) nearOnly(wd.a, (mb) => buildWaterDoor(mb, wd, water, PAINT[Math.floor(Math.abs(wd.a * 7.3)) % PAINT.length]));
+
     for (const br of B.bridges) {
       both(br.a, (mb) => {
         buildFootBridge(mb, br, ground, water);
@@ -725,13 +746,6 @@ function quaySegment(mb: MeshBuilder, a0: number, a1: number, ground: Ground, wa
       const t = ground(a, 1.5) + 0.25;
       mb.cylinder(a, q + 0.6, t, t + 0.75, 0.22, 0.18, 7, lin('#4a4038'), SURF.stone, 0.3);
     }
-    if (rng.chance(0.3) && dry((a0 + a1) / 2 - 2) && dry((a0 + a1) / 2 + 2)) {
-      // stairs + ramp down to the water
-      const a = (a0 + a1) / 2;
-      const t = ground(a, 1.5);
-      const n = Math.max(3, Math.ceil((t - water + 0.6) / 0.3));
-      for (let i = 0; i < n; i++) mb.box(a - 1.2, t - i * 0.3 - 0.3, q - 0.1 - (i + 1) * 0.45, a + 1.2, t - i * 0.3, q - 0.1 - i * 0.45, stone, SURF.stone, SURF.stone, 0.4);
-    }
   }
 }
 
@@ -775,8 +789,6 @@ function inside(rim: P2[], a: number, c: number, m: number): boolean {
 }
 
 const EARTH = lin('#8a7658');
-/** Waterside walls stand this far out in the water, in front of the terrain's slope into it. */
-const WALL_INSET = 1.2;
 const GREEN_EARTH = lin('#8c7c5c');
 
 /** Walkable floor: rectangle in (a, c) with corner heights [a0c0, a1c0, a1c1, a0c1]. */
