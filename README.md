@@ -108,7 +108,7 @@ Author's side note: Quinlans use a version of metric, so proportions were chosen
 3. **The river is the spine.** Most interesting stuff (towns, docks, barges, mills) clusters along water.
 4. **Scale honesty.** Real dimensions for the section you're in. Never fake the radius.
 5. **Golden-hour beauty** on par with the reference site.
-6. **Playable journeys.** Pick a named town from the book on the map, then float there down the river or cut straight to it, and explore.
+6. **Playable journeys.** Pick a town on the map, then float there down the river or cut straight to it, and explore.
 
 ---
 
@@ -236,6 +236,8 @@ See section 7 for the map, river journeys and cutscene travel.
 The core loop: open the map, pick a town, get there by floating down the river or by cutscene teleport, then explore on foot. Free walking between towns is still allowed.
 
 ### 7.1 What Quinlan towns look like
+
+The detailed rules for buildings and towns (dimensions, the wet threshold, materials, decoration, the building catalogue, layout rules) are in [docs/ARCHITECTURE_SPEC.md](docs/ARCHITECTURE_SPEC.md), which extends this section and section 12.
 
 No town names are used from the book. Towns are generated, but their look follows the book's descriptions of Quinlan society.
 
@@ -421,7 +423,7 @@ For instant travel.
 ## 12. Assets
 
 - **Quinlan model:** no canon art exists. Build a stylized low-poly procedural or glTF model from section 1.2: stocky 1.2 m body, otter-like head with a short beak-like toothed snout, side-set eyes, arm-to-torso webbing, broad flat tail. Needed for NPCs, the player's shadow/reflection, and third-person photo mode. Animation set: idle, walk (biped), run (quad), swim, jaw-rub "smile".
-- **Buildings:** modular kit per 7.1: stone lower walls, timber-frame upper walls, thatch/tile/shingle roofs, turf-roofed bank dwellings, shutters, carved trims, mural panels, statues, quay and slipway pieces, bridges, canal walls.
+- **Buildings:** modular kit per 7.1 and [docs/ARCHITECTURE_SPEC.md](docs/ARCHITECTURE_SPEC.md): stone lower walls, timber-frame upper walls, thatch/tile/shingle roofs, turf-roofed bank dwellings, shutters, carved trims, mural panels, statues, quay and slipway pieces, bridges, canal walls.
 - **Textures:** CC0 from Poly Haven / ambientCG.
 - Keep all third-party assets CC0 or clearly licensed.
 
