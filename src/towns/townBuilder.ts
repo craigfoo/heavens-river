@@ -7,7 +7,24 @@ import { wrapS } from '../coords/cylinder';
 import { Rng, seedFor } from '../core/rng';
 import { newSample, type WorldGen } from '../world/gen/world';
 import { BANK_CUT, QUAY_CUT, WALL_INSET, type TownSite } from '../world/gen/settlements';
-import { buildBoathouse, buildBurrow, buildCivic, buildHouse, buildMill, buildTower, buildUniversity, FLOOR_H, PAINT, type Ground } from './kit';
+import {
+  buildBathhouse,
+  buildBoathouse,
+  buildBurrow,
+  buildCivic,
+  buildHouse,
+  buildMarketHall,
+  buildMill,
+  buildOutpost,
+  buildSingingHall,
+  buildTower,
+  buildUniversity,
+  FLOOR_H,
+  marketHallColumns,
+  marketHallFloor,
+  PAINT,
+  type Ground,
+} from './kit';
 import { pointSegDist, resample, type P2 } from './geom';
 import { generateTownLayout, type Path, type TownLayout } from './layout';
 import { MeshBuilder, SURF, lin } from './meshBuilder';
@@ -27,6 +44,7 @@ import {
   buildPlaza,
   buildPool,
   buildRack,
+  buildShrine,
   buildRiverBridge,
   buildSignpost,
   buildStall,
@@ -349,8 +367,22 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
             buildTower(mb, b, ground, o, 9.5, false);
             break;
           case 'civic':
-          case 'hall':
             buildCivic(mb, b, ground, o);
+            break;
+          case 'singinghall':
+            buildSingingHall(mb, b, ground, o);
+            break;
+          case 'markethall':
+            buildMarketHall(mb, b, ground, o);
+            break;
+          case 'bathhouse':
+            buildBathhouse(mb, b, ground, o);
+            break;
+          case 'outpost':
+            buildOutpost(mb, b, ground, o);
+            break;
+          case 'shrine':
+            buildShrine(mb, b, ground, detail);
             break;
           case 'university':
             buildUniversity(mb, b, ground, o);
@@ -366,7 +398,20 @@ export function buildTown(gen: WorldGen, site: TownSite): TownResult {
         }
       });
       // collider footprint (slightly inset so doors feel reachable)
-      if (b.kind !== 'boathouse') addBox(colliders, map, b.a, b.c, b.w + (b.kind === 'civic' ? 4 : 0.4), b.d + (b.kind === 'civic' ? 7 : 0.4), b.rot, ground(b.a, b.c) - 1, ground(b.a, b.c) + b.floors * FLOOR_H + 3);
+      const g = ground(b.a, b.c);
+      if (b.kind === 'markethall') {
+        // open on every side: only its columns stand in the way, over a floor a step up
+        const cr = Math.cos(b.rot);
+        const sr = Math.sin(b.rot);
+        for (const [x, z] of marketHallColumns(b)) addBox(colliders, map, b.a + x * cr - z * sr, b.c + x * sr + z * cr, 0.7, 0.7, b.rot, g - 1, g + 4);
+        const y = marketHallFloor(b, ground);
+        const at = (x: number, z: number): P2 => [b.a + x * cr - z * sr, b.c + x * sr + z * cr];
+        addFloorQuad(floors, map, [at(-b.w / 2, -b.d / 2), at(b.w / 2, -b.d / 2), at(b.w / 2, b.d / 2), at(-b.w / 2, b.d / 2)], [y, y, y, y]);
+      } else if (b.kind !== 'boathouse') {
+        const grow = b.kind === 'civic' ? [4, 7] : b.kind === 'singinghall' ? [2, 1.6] : [0.4, 0.4];
+        const tall = b.kind === 'singinghall' ? 10 : b.kind === 'shrine' ? 2.8 : b.floors * FLOOR_H + 3;
+        addBox(colliders, map, b.a, b.c, b.w + grow[0], b.d + grow[1], b.rot, g - 1, g + tall);
+      }
       if (b.mural) {
         const p = map.pos(b.a, ground(b.a, b.c), b.c);
         murals.push(p[0], p[2], p[1], Math.max(b.w, b.d) * 0.5 + 3.5, b.seed % 100000);

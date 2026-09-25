@@ -194,6 +194,11 @@ export function hipRoof(mb: MeshBuilder, x0: number, x1: number, z0: number, z1:
 /** Where the front door sits along a building's frontage (local x), fixed by its seed. */
 export function frontDoorX(b: Pick<Building, 'kind' | 'w' | 'seed'>): number {
   if (b.kind === 'warehouse') return b.w / 2 - 2.2;
+  if (b.kind === 'bathhouse') {
+    // the bath hall's own door (see buildBathhouse)
+    const hw = bathHallW(b);
+    return -b.w / 2 + hw / 2 + frontDoorX({ kind: 'house', w: hw, seed: b.seed });
+  }
   const h = (Math.imul(b.seed | 0, 2654435761) >>> 0) / 4294967296;
   return (h * 2 - 1) * Math.max(0, b.w / 2 - 1.3) * 0.6;
 }
@@ -212,6 +217,23 @@ export function fanFace(mb: MeshBuilder, outline: [number, number][], cx: number
     const p = outline[i];
     const q = outline[(i + 1) % outline.length];
     mb.tri(c, [q[0], q[1], z], [p[0], p[1], z], rgb, surf, param);
+  }
+}
+
+/**
+ * A flat wall polygon on the face z, fanned from (cx, cy), with its texture
+ * laid flat across the face (so coursing and plaster run on unbroken). The
+ * outline runs counter-clockwise in (x, y); `facing` is the side it shows on.
+ */
+function wallPoly(mb: MeshBuilder, outline: [number, number][], cx: number, cy: number, z: number, facing: -1 | 1, rgb: V3, surf: number, param: number) {
+  const n: V3 = [0, 0, facing];
+  const c = mb.vertex([cx, cy, z], n, rgb, surf, facing < 0 ? cx : -cx, cy, param);
+  const ids = outline.map(([x, y]) => mb.vertex([x, y, z], n, rgb, surf, facing < 0 ? x : -x, y, param));
+  for (let i = 0; i < ids.length; i++) {
+    const p = ids[i];
+    const q = ids[(i + 1) % ids.length];
+    if (facing < 0) mb.index(c, q, p);
+    else mb.index(c, p, q);
   }
 }
 
@@ -750,6 +772,39 @@ export function buildUniversity(mb: MeshBuilder, b: Building, ground: Ground, o:
     const pc = b.c + p.a * s + p.c * c;
     buildHouse(mb, { ...p, a: pa, c: pc, rot: b.rot, kind: 'house', roof: 'slate', floors: 3, seed: b.seed + 11 }, ground, o);
   }
+  // the cloister: an arcade round the courtyard and a pool in the middle (spec 7)
+  const { hi } = footprintGround(b, ground);
+  const y0 = hi + 0.18;
+  mb.frame(b.a, 0, b.c, b.rot);
+  const x0 = -b.w / 2 + wing;
+  const x1 = b.w / 2 - wing;
+  const zb = b.d / 2 - wing;
+  const z0 = -b.d / 2 + 1.2;
+  const stone = ASHLAR[b.seed % ASHLAR.length];
+  const param = (b.seed % 941) / 941;
+  // the court is paved, with the pool sunk in its middle
+  mb.box(x0, y0 - 0.4, z0 - 1.2, x1, y0, zb, stone, SURF.stone, SURF.mosaic, param, false, lin('#d0c4a8'));
+  const pa0 = x0 + 2.6;
+  const pa1 = x1 - 2.6;
+  const pz0 = z0 + 0.8;
+  const pz1 = zb - 2.6;
+  if (pa1 - pa0 > 1.5 && pz1 - pz0 > 1.5) {
+    mb.box(pa0 - 0.3, y0, pz0 - 0.3, pa1 + 0.3, y0 + 0.3, pz0, stone, SURF.stone, SURF.stone, param);
+    mb.box(pa0 - 0.3, y0, pz1, pa1 + 0.3, y0 + 0.3, pz1 + 0.3, stone, SURF.stone, SURF.stone, param);
+    mb.box(pa0 - 0.3, y0, pz0, pa0, y0 + 0.3, pz1, stone, SURF.stone, SURF.stone, param);
+    mb.box(pa1, y0, pz0, pa1 + 0.3, y0 + 0.3, pz1, stone, SURF.stone, SURF.stone, param);
+    mb.quad([pa1, y0 + 0.22, pz0], [pa0, y0 + 0.22, pz0], [pa0, y0 + 0.22, pz1], [pa1, y0 + 0.22, pz1], lin('#4a8a9a'), SURF.water, 0.3);
+  }
+  if (!o.detail) return;
+  // arcade: columns 2 m out from the three inner walls under a lean-to roof
+  const cols: [number, number][] = [];
+  for (let x = x0 + 2; x <= x1 - 2 + 0.01; x += Math.max(2.4, (x1 - x0 - 4) / Math.max(1, Math.round((x1 - x0 - 4) / 2.8)))) cols.push([x, zb - 2]);
+  for (let z = zb - 2 - 2.8; z >= z0; z -= 2.8) cols.push([x0 + 2, z], [x1 - 2, z]);
+  for (const [x, z] of cols) mb.cylinder(x, z, y0, y0 + 2.3, 0.18, 0.15, 8, stone, SURF.stone, param);
+  const roof = lin('#4c525c');
+  mb.quad([x1, y0 + 2.4, zb - 2.3], [x0, y0 + 2.4, zb - 2.3], [x0, y0 + 3.0, zb], [x1, y0 + 3.0, zb], roof, SURF.slate, param);
+  mb.quad([x0 + 2.3, y0 + 2.4, zb - 2.3], [x0 + 2.3, y0 + 2.4, z0], [x0, y0 + 3.0, z0], [x0, y0 + 3.0, zb - 2.3], roof, SURF.slate, param);
+  mb.quad([x1 - 2.3, y0 + 2.4, z0], [x1 - 2.3, y0 + 2.4, zb - 2.3], [x1, y0 + 3.0, zb - 2.3], [x1, y0 + 3.0, z0], roof, SURF.slate, param);
 }
 
 /**
@@ -823,6 +878,293 @@ export function buildMill(mb: MeshBuilder, b: Building, ground: Ground, o: Build
   mb.box(xs - 0.12, yc + 1.4, zr - 0.45, xs + 0.12, yc + 1.62, zw, beam, SURF.timber, SURF.timber, 0.2);
   mb.box(xs - 0.05, water + 1.3, (zw + zr) / 2 - 0.05, xs + 0.05, yc + 1.4, (zw + zr) / 2 + 0.05, IRON, SURF.timber, SURF.timber, 0.3);
   mb.resetFrame();
+}
+
+/** Floor level of a market hall's stone platform (shared with the town's walkable floors). */
+export function marketHallFloor(b: Building, ground: Ground): number {
+  return footprintGround(b, ground).hi + 0.22;
+}
+
+/** Column positions of a market hall in its local frame (for colliders too). */
+export function marketHallColumns(b: Pick<Building, 'w' | 'd'>): [number, number][] {
+  const nx = Math.max(3, Math.round((b.w - 1.1) / 3.8));
+  const zs = b.d > 12 ? [-b.d / 2 + 0.55, 0, b.d / 2 - 0.55] : [-b.d / 2 + 0.55, b.d / 2 - 0.55];
+  const out: [number, number][] = [];
+  for (const z of zs)
+    for (let i = 0; i <= nx; i++) {
+      // the middle row only at every other bay, to keep the floor open
+      if (z === 0 && i % 2 === 1) continue;
+      out.push([-b.w / 2 + 0.55 + ((b.w - 1.1) * i) / nx, z]);
+    }
+  return out;
+}
+
+/**
+ * Market hall (spec 7): a tile roof on columns with no walls, its long side
+ * on the square: stone columns in cities and rich towns, timber posts on
+ * stone pads elsewhere; trestle tables with goods under it.
+ */
+export function buildMarketHall(mb: MeshBuilder, b: Building, ground: Ground, o: BuildOpts) {
+  const rng = new Rng(b.seed + 11);
+  const { lo } = footprintGround(b, ground);
+  mb.frame(b.a, 0, b.c, b.rot);
+  const w = b.w;
+  const d = b.d;
+  const m = materials(b, rng);
+  const timber = rng.pick(TIMBER);
+  const param = (b.seed % 971) / 971;
+  const y0 = marketHallFloor(b, ground);
+  const eave = y0 + 3.5;
+  const stoneCols = b.base === 'ashlar' || b.deco > 0.62;
+  // a stone platform a step up from the square
+  mb.box(-w / 2, lo - 0.6, -d / 2, w / 2, y0, d / 2, m.baseRgb, m.baseSurf, SURF.stone, m.age, false, lin('#b4a68e'));
+  const cols = marketHallColumns(b);
+  for (const [x, z] of cols) {
+    if (stoneCols) {
+      mb.cylinder(x, z, y0, eave - 0.3, 0.3, 0.24, o.detail ? 10 : 5, m.baseRgb, m.baseSurf, param);
+      mb.box(x - 0.36, eave - 0.36, z - 0.36, x + 0.36, eave - 0.3, z + 0.36, m.baseRgb, m.baseSurf, m.baseSurf, param);
+    } else {
+      mb.box(x - 0.3, y0, z - 0.3, x + 0.3, y0 + 0.35, z + 0.3, m.baseRgb, m.baseSurf, m.baseSurf, param);
+      mb.box(x - 0.17, y0 + 0.35, z - 0.17, x + 0.17, eave - 0.3, z + 0.17, timber, SURF.timber, SURF.timber, param);
+    }
+  }
+  // plates along the rows and tie beams across at every column pair
+  const zs = [...new Set(cols.map(([, z]) => z))];
+  for (const z of zs) mb.box(-w / 2 + 0.25, eave - 0.32, z - 0.2, w / 2 - 0.25, eave, z + 0.2, timber, SURF.timber, SURF.timber, param);
+  for (const [x] of cols.filter(([, z]) => z === zs[0])) mb.box(x - 0.16, eave - 0.3, -d / 2 + 0.3, x + 0.16, eave - 0.02, d / 2 - 0.3, timber, SURF.timber, SURF.timber, param);
+  // the roof, long side to the square, with its gable ends boarded
+  const roofRgb = roofColor(b.roof, rng);
+  const yR = gableRoof(mb, -w / 2, w / 2, -d / 2, d / 2, eave, 0.55, 1.0, 0.6, roofRgb, roofSurf(b.roof), param, 0.14, timber, SURF.wood, o.detail && b.deco >= 0.35 ? rng.pick(PAINT) : undefined);
+  if (!o.detail) return;
+  // king posts from the tie beams up to the ridge
+  for (const [x] of cols.filter(([, z]) => z === zs[0])) mb.box(x - 0.1, eave, -0.1, x + 0.1, yR - 0.1, 0.1, timber, SURF.timber, SURF.timber, param);
+  if (b.deco >= 0.5) for (const sx of [-1, 1]) mb.cylinder(sx * (w / 2 + 0.7), 0, yR - 0.1, yR + 0.6, 0.13, 0.02, 5, GOLD, SURF.gold, param);
+  // trestle tables at counter height (0.6 m, spec 2) with goods, two rows
+  const goods = ['#c85a2a', '#d8b040', '#6a9a3a', '#8a3a5a', '#c8a878', '#6a8ab0'].map(lin);
+  for (const z of [-d / 4 - 0.4, d / 4 + 0.4]) {
+    for (let x = -w / 2 + 2.2; x < w / 2 - 2.2; x += 3.8) {
+      if (cols.some(([cx, cz]) => Math.abs(cx - x) < 1.5 && Math.abs(cz - z) < 1)) continue;
+      mb.box(x - 1.2, y0 + 0.55, z - 0.4, x + 1.2, y0 + 0.62, z + 0.4, WOOD, SURF.wood, SURF.wood, param);
+      for (const lx of [x - 1.0, x + 1.0]) mb.box(lx - 0.05, y0, z - 0.3, lx + 0.05, y0 + 0.55, z + 0.3, timber, SURF.timber, SURF.timber, param);
+      for (let k = 0; k < 4; k++) mb.ellipsoid(x - 0.8 + k * 0.53, y0 + 0.72, z + rng.range(-0.2, 0.2), 0.2, 0.12, 0.2, 6, rng.pick(goods), SURF.plain, 0.2);
+    }
+  }
+}
+
+/**
+ * Singing hall (spec 7): one tall room under a timber barrel vault, its end
+ * to the square. Buttressed walls, a band of windows high up, a grand door
+ * between banners, a round window in the end wall, murals on the long walls.
+ */
+export function buildSingingHall(mb: MeshBuilder, b: Building, ground: Ground, o: BuildOpts) {
+  const rng = new Rng(b.seed + 13);
+  const { lo, hi } = footprintGround(b, ground);
+  mb.frame(b.a, 0, b.c, b.rot);
+  const w = b.w;
+  const d = b.d;
+  const m = materials(b, rng);
+  const param = (b.seed % 967) / 967;
+  const y0 = hi + 0.45;
+  const H = 7.2;
+  const yT = y0 + H;
+  // podium, and steps up to the door
+  mb.box(-w / 2 - 0.8, lo - 0.6, -d / 2 - 0.8, w / 2 + 0.8, y0, d / 2 + 0.8, m.baseRgb, m.baseSurf, m.baseSurf, m.age);
+  for (let i = 0; i < 2; i++) mb.box(-2.4, lo - 0.3, -d / 2 - 0.8 - (i + 1) * 0.42, 2.4, y0 - (i + 1) * 0.18, -d / 2 - 0.8 - i * 0.42, m.baseRgb, m.baseSurf, m.baseSurf, m.age);
+  // stone below, the upper wall plastered or dressed
+  mb.box(-w / 2, y0, -d / 2, w / 2, y0 + 3, d / 2, m.baseRgb, m.baseSurf, m.baseSurf, m.age);
+  mb.box(-w / 2, y0 + 3, -d / 2, w / 2, yT, d / 2, m.upperRgb, m.upperSurf === SURF.halftimber ? SURF.plaster : m.upperSurf, m.upperSurf === SURF.halftimber ? SURF.plaster : m.upperSurf, m.age);
+  // buttresses down the long walls
+  const bays: number[] = [];
+  for (let z = -d / 2 + 2.5; z <= d / 2 - 2.4; z += (d - 5) / Math.max(1, Math.round((d - 5) / 5.5))) bays.push(z);
+  for (const z of bays)
+    for (const sx of [-1, 1]) {
+      const x0 = sx > 0 ? w / 2 : -w / 2 - 0.9;
+      mb.box(x0, lo - 0.3, z - 0.45, x0 + 0.9, yT - 1.6, z + 0.45, m.baseRgb, m.baseSurf, m.baseSurf, m.age);
+      mb.box(sx > 0 ? w / 2 : -w / 2 - 0.5, yT - 1.6, z - 0.4, sx > 0 ? w / 2 + 0.5 : -w / 2, yT - 0.4, z + 0.4, m.baseRgb, m.baseSurf, m.baseSurf, m.age);
+    }
+  // the vault: a shallow barrel along the depth, springing just below the wall heads
+  const R = w / 2 + 0.7;
+  const rise = w * 0.3;
+  const n = o.detail ? 14 : 7;
+  const arc = (i: number): [number, number] => {
+    const t = (i / n) * Math.PI;
+    return [Math.cos(t) * R, yT - 0.25 + Math.sin(t) * rise];
+  };
+  const roofRgb = roofColor(b.roof, rng);
+  const rs = roofSurf(b.roof);
+  const z0 = -d / 2 - 0.7;
+  const z1 = d / 2 + 0.7;
+  for (let i = 0; i < n; i++) {
+    const [xa, ya] = arc(i);
+    const [xb, yb] = arc(i + 1);
+    mb.quad([xa, ya, z1], [xa, ya, z0], [xb, yb, z0], [xb, yb, z1], roofRgb, rs, param);
+    // underside, seen under the overhang at the ends
+    mb.quad([xb, yb - 0.15, z1], [xb, yb - 0.15, z0], [xa, ya - 0.15, z0], [xa, ya - 0.15, z1], lin('#3a2c20'), SURF.wood, param);
+    // the vault's edge at each end
+    mb.quad([xb, yb - 0.15, z0], [xa, ya - 0.15, z0], [xa, ya, z0], [xb, yb, z0], roofRgb, rs, param);
+    mb.quad([xa, ya - 0.15, z1], [xb, yb - 0.15, z1], [xb, yb, z1], [xa, ya, z1], roofRgb, rs, param);
+  }
+  // end walls fill the vault
+  const endOutline: [number, number][] = [[w / 2, yT]];
+  for (let i = 1; i < n; i++) {
+    const [x, y] = arc(i);
+    if (Math.abs(x) < w / 2) endOutline.push([x, y - 0.2]);
+  }
+  endOutline.push([-w / 2, yT]);
+  const endRgb = m.upperRgb;
+  const endSurf = m.upperSurf === SURF.halftimber ? SURF.plaster : m.upperSurf;
+  wallPoly(mb, endOutline, 0, yT + 0.3, -d / 2, -1, endRgb, endSurf, m.age);
+  wallPoly(mb, endOutline, 0, yT + 0.3, d / 2, 1, endRgb, endSurf, m.age);
+  // ribs of the vault, and a gilded ridge line on rich halls
+  if (o.detail)
+    for (const z of bays) {
+      for (let i = 0; i < n; i++) {
+        const [xa, ya] = arc(i);
+        const [xb, yb] = arc(i + 1);
+        mb.quad([xa, ya + 0.08, z + 0.18], [xa, ya + 0.08, z - 0.18], [xb, yb + 0.08, z - 0.18], [xb, yb + 0.08, z + 0.18], b.deco > 0.75 ? GOLD : lin('#5a4a3a'), b.deco > 0.75 ? SURF.gold : SURF.timber, param);
+      }
+    }
+  if (!o.detail) return;
+  const paint = fade(rng.pick(PAINT), b.age);
+  // round window high in the front end wall, in a carved stone ring
+  const oy = yT + rise * 0.42;
+  const or = Math.min(1.3, rise * 0.3);
+  const ring = (r: number): [number, number][] => Array.from({ length: 16 }, (_, i) => [Math.cos((i / 16) * Math.PI * 2) * r, oy + Math.sin((i / 16) * Math.PI * 2) * r]);
+  fanFace(mb, ring(or + 0.3), 0, oy, -d / 2 - 0.03, m.baseRgb, SURF.stone, 1.5);
+  fanFace(mb, ring(or), 0, oy, -d / 2 - 0.06, lin('#b08040'), b.deco > 0.7 ? SURF.mica : SURF.lattice, param);
+  // the grand door between hanging banners, a band of windows above
+  door(mb, 0, y0, -d / 2, paint, param, Math.max(0.6, b.deco), 2.4, 2.6, 10);
+  for (const sx of [-1, 1]) {
+    const x = sx * w * 0.3;
+    mb.quad([x + 0.8, y0 + 1.2, -d / 2 - 0.08], [x - 0.8, y0 + 1.2, -d / 2 - 0.08], [x - 0.8, yT - 0.6, -d / 2 - 0.08], [x + 0.8, yT - 0.6, -d / 2 - 0.08], rng.pick(PAINT), SURF.flags, rng.next());
+  }
+  const st: WinStyle = { ...winStyle(b, rng, paint), shutter: 'side' };
+  windowBand(mb, w * 0.35, y0 + 4.4, -d / 2, st, param);
+  // the long walls: murals low down, windows high up between the buttresses
+  for (const sx of [-1, 1]) {
+    mb.frame(b.a, 0, b.c, b.rot + (sx > 0 ? Math.PI / 2 : -Math.PI / 2));
+    for (let k = 0; k < bays.length - 1; k++) {
+      const zc = (bays[k] + bays[k + 1]) / 2;
+      // in the rotated frame the long wall is the face z = -w/2 and the bay centre sits at x = -sx * zc
+      const x = sx > 0 ? zc : -zc;
+      const half = (bays[k + 1] - bays[k]) / 2 - 0.7;
+      windowOpen(mb, x, yT - 1.7, -w / 2, { ...st, shutter: 'top' }, param, Math.min(2.0, half * 2 - 0.4), 0.6);
+      if (b.mural) mb.quad([x + half, y0 + 0.9, -w / 2 - 0.03], [x - half, y0 + 0.9, -w / 2 - 0.03], [x - half, y0 + 4.0, -w / 2 - 0.03], [x + half, y0 + 4.0, -w / 2 - 0.03], lin('#ffffff'), SURF.mural, rng.next());
+    }
+  }
+  mb.frame(b.a, 0, b.c, b.rot);
+}
+
+/** Where a bathhouse's bath hall ends and its pool yard begins (local x). */
+const bathHallW = (b: Pick<Building, 'w'>) => Math.min(18, b.w - 7.5);
+
+/**
+ * Bathhouse (spec 7): a stone bath hall on the quay with a lantern of steam
+ * vents on its roof and a furnace chimney for the steam room, beside a
+ * walled pool yard fed from the river by a spout.
+ */
+export function buildBathhouse(mb: MeshBuilder, b: Building, ground: Ground, o: BuildOpts) {
+  const rng = new Rng(b.seed + 17);
+  const hw = bathHallW(b);
+  const xh = -b.w / 2 + hw / 2;
+  const cr = Math.cos(b.rot);
+  const sr = Math.sin(b.rot);
+  // the bath hall itself: a single tall storey of stone
+  const hall: Building = { ...b, kind: 'house', w: hw, a: b.a + xh * cr, c: b.c + xh * sr, floors: 1, upper: b.base === 'ashlar' ? 'stone' : b.upper, lookout: false, mural: false };
+  buildHouse(mb, hall, ground, o);
+  const { lo, hi } = footprintGround(b, ground);
+  mb.frame(b.a, 0, b.c, b.rot);
+  const m = materials(b, rng);
+  const param = (b.seed % 953) / 953;
+  const y0 = hi + 0.18;
+  // the hall's roof as buildHouse makes it (a gable along x at the house pitch)
+  const top = footprintGround(hall, ground).hi + 0.18 + FLOOR_H;
+  const ridge = top + (b.d / 2) * Math.tan(b.roof === 'thatch' ? 0.8 : b.roof === 'slate' ? 0.7 : 0.6);
+  // lantern of louvred steam vents on the ridge, and the furnace chimney
+  if (o.detail) {
+    mb.box(xh - 1.4, ridge - 0.6, -0.9, xh + 1.4, ridge + 0.9, 0.9, lin('#3a2c20'), SURF.dark, SURF.dark, param);
+    for (let k = 0; k < 5; k++) mb.box(xh - 1.45, ridge - 0.45 + k * 0.28, -0.95, xh + 1.45, ridge - 0.37 + k * 0.28, 0.95, WOOD, SURF.wood, SURF.wood, param);
+    hipRoof(mb, xh - 1.7, xh + 1.7, -1.2, 1.2, ridge + 0.9, 0.6, 0.2, roofColor(b.roof, rng), roofSurf(b.roof), param);
+  }
+  mb.box(-b.w / 2 + 0.6, top - 0.5, b.d / 2 - 1.6, -b.w / 2 + 1.6, ridge + 1.6, b.d / 2 - 0.6, m.baseRgb, m.baseSurf, m.baseSurf, 0.44);
+  // the pool yard: a low wall round a sunken pool with a mosaic floor
+  const x0 = -b.w / 2 + hw + 0.2;
+  const x1 = b.w / 2;
+  const z0 = -b.d / 2 + 0.4;
+  const z1 = b.d / 2 - 0.4;
+  const wallRgb = m.baseRgb;
+  mb.box(x0, lo - 0.4, z0, x1, y0, z1, m.baseRgb, m.baseSurf, SURF.stone, m.age, false, lin('#c8bca4'));
+  mb.box(x1 - 0.35, y0, z0, x1, y0 + 1.0, z1, wallRgb, m.baseSurf, SURF.stone, m.age);
+  mb.box(x0, y0, z1 - 0.35, x1, y0 + 1.0, z1, wallRgb, m.baseSurf, SURF.stone, m.age);
+  for (const [a0, a1] of [
+    [x0, (x0 + x1) / 2 - 0.9],
+    [(x0 + x1) / 2 + 0.9, x1],
+  ])
+    mb.box(a0, y0, z0, a1, y0 + 1.0, z0 + 0.35, wallRgb, m.baseSurf, SURF.stone, m.age);
+  const px0 = x0 + 0.9;
+  const px1 = x1 - 1.0;
+  const pz0 = z0 + 1.4;
+  const pz1 = z1 - 1.4;
+  const rim = lin('#b8ac98');
+  mb.box(px0 - 0.35, y0 - 0.05, pz0 - 0.35, px1 + 0.35, y0 + 0.3, pz0, rim, SURF.stone, SURF.mosaic, 0.7);
+  mb.box(px0 - 0.35, y0 - 0.05, pz1, px1 + 0.35, y0 + 0.3, pz1 + 0.35, rim, SURF.stone, SURF.mosaic, 0.7);
+  mb.box(px0 - 0.35, y0 - 0.05, pz0, px0, y0 + 0.3, pz1, rim, SURF.stone, SURF.mosaic, 0.7);
+  mb.box(px1, y0 - 0.05, pz0, px1 + 0.35, y0 + 0.3, pz1, rim, SURF.stone, SURF.mosaic, 0.7);
+  mb.quad([px1, y0 + 0.22, pz0], [px0, y0 + 0.22, pz0], [px0, y0 + 0.22, pz1], [px1, y0 + 0.22, pz1], lin('#4a8a9a'), SURF.water, 0.3);
+  if (!o.detail) return;
+  // river water pours in from a spout in the back wall
+  const sx = (px0 + px1) / 2;
+  mb.box(sx - 0.2, y0 + 0.55, z1 - 0.95, sx + 0.2, y0 + 0.8, z1 - 0.35, m.baseRgb, SURF.stone, SURF.stone, 0.5);
+  mb.quad([sx + 0.12, y0 + 0.22, pz1 - 0.3], [sx - 0.12, y0 + 0.22, pz1 - 0.3], [sx - 0.1, y0 + 0.58, z1 - 0.95], [sx + 0.1, y0 + 0.58, z1 - 0.95], lin('#a8d0d4'), SURF.water, 0.6);
+  // benches along the walls
+  for (const z of [z0 + 0.75, z1 - 0.75]) mb.box(px0, y0, z - 0.2, px1, y0 + 0.35, z + 0.2, WOOD, SURF.wood, SURF.wood, param);
+}
+
+/**
+ * Crew outpost (spec 7): plain, and a little too well built. Sharp,
+ * unweathered dressed stone, a flat roof behind a parapet, square glazed
+ * windows, a flush door and a slim mast: nothing a Quinlan mason would do.
+ */
+export function buildOutpost(mb: MeshBuilder, b: Building, ground: Ground, o: BuildOpts) {
+  const { lo, hi } = footprintGround(b, ground);
+  mb.frame(b.a, 0, b.c, b.rot);
+  const w = b.w;
+  const d = b.d;
+  const stone = lin('#cfcbc2');
+  const trim = lin('#9a978f');
+  const y0 = hi + 0.12;
+  const H = 3.3;
+  const age = wallAge(0);
+  mb.box(-w / 2, lo - 0.6, -d / 2, w / 2, y0 + H, d / 2, stone, SURF.ashlar, SURF.stone, age);
+  // parapet round the flat roof
+  for (const [a0, b0, a1, b1] of [
+    [-w / 2, -d / 2, w / 2, -d / 2 + 0.22],
+    [-w / 2, d / 2 - 0.22, w / 2, d / 2],
+    [-w / 2, -d / 2, -w / 2 + 0.22, d / 2],
+    [w / 2 - 0.22, -d / 2, w / 2, d / 2],
+  ])
+    mb.box(a0, y0 + H, b0, a1, y0 + H + 0.45, b1, trim, SURF.stone, SURF.stone, age);
+  if (!o.detail) return;
+  const glass = lin('#34404a');
+  // square glazed windows, flush with the wall, on every face; a plain door at the front
+  for (let f = 0; f < 4; f++) {
+    mb.frame(b.a, 0, b.c, b.rot + (f * Math.PI) / 2);
+    const half = (f % 2 ? d : w) / 2;
+    const zf = -(f % 2 ? w : d) / 2;
+    for (const x of f === 0 ? [-half * 0.55, half * 0.55] : [-half * 0.4, half * 0.4]) {
+      mb.quad([x + 0.45, y0 + 1.0, zf - 0.01], [x - 0.45, y0 + 1.0, zf - 0.01], [x - 0.45, y0 + 1.9, zf - 0.01], [x + 0.45, y0 + 1.9, zf - 0.01], glass, SURF.dark, 0.9);
+      mb.box(x - 0.52, y0 + 0.93, zf - 0.03, x + 0.52, y0 + 1.0, zf + 0.01, trim, SURF.stone, SURF.stone, age);
+    }
+    if (f === 0) {
+      mb.quad([0.55, y0, zf - 0.01], [-0.55, y0, zf - 0.01], [-0.55, y0 + 2.0, zf - 0.01], [0.55, y0 + 2.0, zf - 0.01], lin('#5a5e62'), SURF.plain, 0.5);
+      mb.box(-0.62, y0 + 2.0, zf - 0.03, 0.62, y0 + 2.08, zf + 0.01, trim, SURF.stone, SURF.stone, age);
+      mb.box(0.3, y0 + 0.95, zf - 0.06, 0.38, y0 + 1.05, zf - 0.01, lin('#c8ccd0'), SURF.plain, SURF.plain, 0.5);
+    }
+  }
+  mb.frame(b.a, 0, b.c, b.rot);
+  // a slim mast with a cross arm
+  mb.cylinder(w / 2 - 1, d / 2 - 1, y0 + H, y0 + H + 3.6, 0.05, 0.035, 6, lin('#8a8e92'), SURF.plain, 0.5);
+  mb.box(w / 2 - 1.5, y0 + H + 3.1, d / 2 - 1.03, w / 2 - 0.5, y0 + H + 3.15, d / 2 - 0.97, lin('#8a8e92'), SURF.plain, SURF.plain, 0.5);
 }
 
 /** Boathouse: an open-fronted shed over the water. */

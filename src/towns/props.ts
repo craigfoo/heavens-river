@@ -2,10 +2,10 @@
 // market stalls, fishing racks, walls, amphitheatre, barges and pavements.
 
 import { Rng } from '../core/rng';
-import { archOutline, buildBoat, DARK, fanFace, GOLD, PAINT, STONE, TIMBER, WOOD, type Ground } from './kit';
+import { archOutline, buildBoat, DARK, fanFace, gableRoof, GOLD, PAINT, STONE, TIMBER, WOOD, type Ground } from './kit';
 import { pointSegDist, resample, type OBB, type P2 } from './geom';
 import type { CanalDef } from '../world/gen/settlements';
-import type { BankLayout, Bridge, Fountain, Pier, Plaza, Rack, Rect, Slipway, Statue, Stall, WallSeg, WaterDoor } from './layout';
+import type { BankLayout, Bridge, Building, Fountain, Pier, Plaza, Rack, Rect, Slipway, Statue, Stall, WallSeg, WaterDoor } from './layout';
 import { cross, dot, lin, MeshBuilder, sub, SURF, type V3 } from './meshBuilder';
 
 const PAVE = lin('#a89a84');
@@ -431,6 +431,45 @@ export function buildRiverBridge(mb: MeshBuilder, a: number, bw: number, riverW:
 }
 
 /** Plinth plus a stylised figure: Quinlans, leaping fish, river creatures or flowing abstract forms. */
+/**
+ * Wayside shrine (spec 7, 3 x 3 m): a small statue under a roofed niche,
+ * a little pool before it, and offerings on the ledge. It faces -z.
+ */
+export function buildShrine(mb: MeshBuilder, b: Building, ground: Ground, detail: boolean) {
+  const rng = new Rng(b.seed);
+  const base = Math.max(ground(b.a, b.c), ground(b.a - Math.sin(b.rot) * 1.4, b.c + Math.cos(b.rot) * 1.4));
+  const y = base + 0.25;
+  mb.frame(b.a, 0, b.c, b.rot);
+  const stone = rng.pick(STONE);
+  // platform, back wall and two front posts under a small tiled roof
+  mb.box(-1.5, base - 0.5, -1.5, 1.5, y, 1.5, stone, SURF.stone, SURF.mosaic, 0.6, false, lin('#c8b898'));
+  mb.box(-1.35, y, 0.95, 1.35, y + 2.2, 1.3, stone, SURF.stone, SURF.stone, 0.45);
+  for (const sx of [-1, 1]) mb.box(sx * 1.25 - 0.09, y, -0.45, sx * 1.25 + 0.09, y + 2.05, -0.27, TIMBER[0], SURF.timber, SURF.timber, 0.3);
+  mb.box(-1.4, y + 2.05, -0.5, 1.4, y + 2.2, 1.3, TIMBER[0], SURF.timber, SURF.timber, 0.3);
+  mb.frame(b.a, 0, b.c, b.rot + Math.PI / 2);
+  gableRoof(mb, -0.75, 1.4, -1.55, 1.55, y + 2.2, 0.6, 0.25, 0.2, lin('#b0583a'), SURF.tile, 0.3, 0.1, stone, SURF.stone, b.deco > 0.6 ? GOLD : undefined);
+  mb.frame(b.a, 0, b.c, b.rot);
+  // the figure on a low plinth, facing out
+  const sa = b.a + Math.sin(b.rot) * -0.35;
+  const sc = b.c - Math.cos(b.rot) * -0.35;
+  buildStatue(mb, { a: sa, c: sc, rot: b.rot, kind: rng.pick(['quinlan', 'otter', 'fish', 'flow'] as const), scale: 0.55, seed: b.seed + 1, plinth: y - ground(sa, sc) + 0.35 }, ground, detail);
+  mb.frame(b.a, 0, b.c, b.rot);
+  // a small pool in front, and offerings
+  mb.box(-1.0, y, -1.45, 1.0, y + 0.3, -1.3, stone, SURF.stone, SURF.stone, 0.5);
+  mb.box(-1.0, y, -0.85, 1.0, y + 0.3, -0.7, stone, SURF.stone, SURF.stone, 0.5);
+  for (const sx of [-1, 1]) mb.box(sx > 0 ? 0.85 : -1.0, y, -1.3, sx > 0 ? 1.0 : -0.85, y + 0.3, -0.85, stone, SURF.stone, SURF.stone, 0.5);
+  mb.quad([0.85, y + 0.22, -1.3], [-0.85, y + 0.22, -1.3], [-0.85, y + 0.22, -0.85], [0.85, y + 0.22, -0.85], WATER, SURF.water, 0.2);
+  if (!detail) {
+    mb.resetFrame();
+    return;
+  }
+  for (let i = 0; i < 5; i++) {
+    const x = -1.1 + i * 0.55 + rng.range(-0.1, 0.1);
+    mb.ellipsoid(x, y + 0.08, 0.7, 0.1, 0.08, 0.1, 6, rng.pick(PAINT), SURF.plain, 0.4);
+  }
+  mb.resetFrame();
+}
+
 export function buildStatue(mb: MeshBuilder, st: Statue, ground: Ground, detail: boolean) {
   const rng = new Rng(st.seed);
   const base = ground(st.a, st.c);

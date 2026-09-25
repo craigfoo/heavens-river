@@ -178,8 +178,10 @@ vec3 townSurface(float type, vec2 uv, float param, vec3 base, float dist) {
     // old plaster flakes off the stone beneath
     float age = wallAgeOf(param);
     if (age > 0.0) {
-      float fl = smoothstep(0.8 - 0.28 * age, 0.83 - 0.28 * age, tNoise(uv * 0.8 + 21.0));
-      col = mix(col, vec3(0.42, 0.36, 0.29) * (0.8 + 0.35 * tNoise(uv * 9.0)), fl * 0.8);
+      // small patches, mostly low on the wall where the damp gets in
+      float th = 0.9 - 0.2 * age + 0.06 * smoothstep(0.5, 3.0, uv.y);
+      float fl = smoothstep(th, th + 0.025, tNoise(uv * 1.3 + 21.0));
+      col = mix(col, vec3(0.42, 0.36, 0.29) * (0.8 + 0.35 * tNoise(uv * 9.0)), fl * 0.75);
     }
     col = wallPatina(col, uv, param);
     tRough = 0.92;

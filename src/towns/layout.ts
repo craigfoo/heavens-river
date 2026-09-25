@@ -25,7 +25,6 @@ export type BuildingKind =
   | 'tavern'
   | 'shop'
   | 'workshop'
-  | 'hall'
   | 'watch'
   | 'civic'
   | 'university'
@@ -478,7 +477,7 @@ class Plan {
   }
 
   /** Taverns, the watch house and the civic hall placed so far. */
-  readonly n: Counters = { tavern: 0, watch: false, civic: false };
+  readonly n: Counters = { tavern: 0, watch: false, civic: false, bath: 0, shrine: 0, outpost: false };
 
   addBuilding(b: Building) {
     this.B.buildings.push(b);
@@ -486,6 +485,9 @@ class Plan {
     if (b.kind === 'tavern') this.n.tavern++;
     else if (b.kind === 'watch') this.n.watch = true;
     else if (b.kind === 'civic') this.n.civic = true;
+    else if (b.kind === 'bathhouse') this.n.bath++;
+    else if (b.kind === 'outpost') this.n.outpost = false;
+    else if (b.kind === 'shrine') this.n.shrine++;
   }
 
   /** Distance from a point to the nearest path edge (negative on a path). */
@@ -686,6 +688,10 @@ interface Counters {
   tavern: number;
   watch: boolean;
   civic: boolean;
+  bath: number;
+  shrine: number;
+  /** A crew outpost is still wanted on this bank (only some towns have one, spec 7). */
+  outpost: boolean;
 }
 
 type Spec = Omit<Building, 'a' | 'c' | 'rot' | 'seed' | 'sunken'>;
@@ -738,6 +744,9 @@ function specFor(rng: Rng, district: District, waterfront: boolean, city: boolea
   } else {
     s = core ? (rng.chance(0.5) ? townhouse() : house()) : rng.chance(0.4) ? cottage() : house();
   }
+  if (waterfront && n.bath < (city ? 2 : 1) && rng.chance(0.05)) s = mk('bathhouse', 26, 12, 1, 'tile');
+  else if (n.outpost && loud && !waterfront && district !== 'market' && rng.chance(0.04)) s = mk('outpost', 8, 8, 1, 'flat');
+  else if (!waterfront && (district === 'residential' || district === 'edge' || district === 'craft') && n.shrine < (city ? 22 : 9) && rng.chance(0.005)) s = mk('shrine', 3, 3, 1, 'tile');
   if (!n.watch && rng.chance(0.03)) s = mk('watch', 8, 10, 2, 'tile', false, true);
   if (city && district === 'market' && !n.civic && rng.chance(0.05)) s = mk('civic', 30, 20, 3, 'dome', true, true);
   if (!s.mural) s.mural = rng.chance(0.1) && s.floors >= 2;
@@ -766,6 +775,7 @@ function dress(B: BankLayout, tier: TownSite['kind'], oldest: P2, reach: number,
     b.lookout = b.floors >= 2 && b.w * b.d > 130 && b.kind !== 'civic' && b.kind !== 'university' && rng.chance(tier === 'city' ? 0.3 : 0.15);
     // the largest, richest walls are painted
     if (!b.mural && b.deco > 0.82 && b.floors >= 2 && b.w >= 9) b.mural = rng.chance(0.5);
+    if (b.kind === 'outpost') Object.assign(b, { deco: 0.2, age: 0.02, base: 'ashlar', upper: 'stone', lookout: false, mural: false });
   }
 }
 
@@ -999,15 +1009,16 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   B.signpost = { a: mA + 6, c: quayW + 1 };
   P.keep.push({ a: B.signpost.a, c: B.signpost.c, r: 2 });
   // the hall at its head, facing the river
+  // the hall at the head of the square: the civic hall in a city, the singing hall in a town
   const hall: Building = {
     a: mA,
-    c: mC + mRim(Math.PI / 2) + 1.5 + (city ? 13 : 8),
-    w: city ? 40 : 24,
-    d: city ? 26 : 16,
+    c: mC + mRim(Math.PI / 2) + 1.5 + (city ? 13 : 15),
+    w: city ? 40 : 18,
+    d: city ? 26 : 30,
     rot: 0,
-    floors: city ? 3 : 2,
-    kind: city ? 'civic' : 'hall',
-    roof: city ? 'dome' : 'tile',
+    floors: city ? 3 : 1,
+    kind: city ? 'civic' : 'singinghall',
+    roof: city ? 'dome' : 'shingle',
     district: 'civic',
     seed: rng.int(0, 1e9),
     mural: true,
@@ -1228,6 +1239,41 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
     }
   }
 
+  // ---- the market hall stands with its long side on the square; the singing
+  // hall joins it there in a city (its end to the square: loud uses together,
+  // spec 8). Their sites are kept before the lanes are laid.
+  const specials: Building[] = [];
+  const besideSquare = (sp: Spec, ts: number[]): boolean => {
+    const at = (t: number): P2 => [mA + Math.cos(t) * mRim(t), mC + Math.sin(t) * mRim(t)];
+    for (const t of ts) {
+      const p = at(t);
+      const q0 = at(t - 0.02);
+      const q1 = at(t + 0.02);
+      const l = Math.hypot(q1[0] - q0[0], q1[1] - q0[1]) || 1;
+      const na = (q1[1] - q0[1]) / l;
+      const nc = -(q1[0] - q0[0]) / l;
+      const off = 1.4 + sp.d / 2;
+      const b: Building = { ...sp, a: p[0] + na * off, c: p[1] + nc * off, rot: Math.atan2(-na, nc), seed: rng.int(0, 1e9), sunken: false, wet: false };
+      if (P.fits(obbOf(b)) && !P.reserved.some((r) => obbOverlap(obbOf(b), r, 1))) {
+        P.reserved.push(obbOf(b));
+        specials.push(b);
+        return true;
+      }
+    }
+    return false;
+  };
+  const flank = (from: number, to: number, step: number) => {
+    const sgn = rng.sign();
+    const out: number[] = [];
+    for (let k = from; k <= to + 1e-6; k += step) out.push(Math.PI / 2 + sgn * k, Math.PI / 2 - sgn * k);
+    return out;
+  };
+  const special = (kind: BuildingKind, w: number, d: number, roof: RoofKind): Spec => ({ ...UNDRESSED, kind, w, d, floors: 1, roof, district: 'market', mural: kind === 'singinghall', waterDoor: false, tower: false });
+  if (city && !hallOk)
+    for (const [w, d] of [[40, 26], [30, 20]]) if (besideSquare({ ...special('civic', w, d, 'dome'), floors: 3, district: 'civic', mural: true, tower: true }, flank(0.3, 1.4, 0.08))) break;
+  if (city || !hallOk) besideSquare(special('singinghall', 18, 30, 'shingle'), flank(0.45, 1.45, 0.08));
+  for (const [w, d] of city ? [[30, 15], [24, 12], [20, 10]] : [[24, 12], [20, 10]]) if (besideSquare(special('markethall', w, d, 'tile'), flank(0.5, 1.55, 0.06))) break;
+
   // ---- walks along the canals and around the harbour basin
   const walkW = 2.8;
   const walkRuns = (pts: P2[], w: number) => {
@@ -1415,11 +1461,13 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
   // ---- buildings
   const n = P.n;
   n.civic = city;
+  n.outpost = rng.chance(city ? 0.6 : 0.3);
   if (hallOk) {
     P.reserved.length = 0;
     P.addBuilding(hall);
   }
   for (const m of mills) P.addBuilding(m);
+  for (const b of specials) P.addBuilding(b);
   // loud uses (taverns) keep near the market (spec 8)
   const loudR = city ? 260 : 160;
   const pickAt = (set: 'water' | 'path') => (a: number, c: number) => {
@@ -1517,8 +1565,12 @@ function townBank(site: TownSite, side: 1 | -1, primary: boolean): BankLayout {
       B.fountains.push({ a: q.a, c: q.c, r: Math.min(3.6, r0 * 0.35) });
       if (rng.chance(0.5)) statue();
     } else if (q.feature === 'well') B.fountains.push({ a: q.a, c: q.c, r: 1.5 });
-    else if (q.feature === 'statue') statue();
-    else {
+    else if (q.feature === 'statue') {
+      // a wayside shrine in the middle of the common, or a statue
+      const sh: Building = { ...UNDRESSED, a: q.a, c: q.c, w: 3, d: 3, rot: rng.range(0, TAU), floors: 1, kind: 'shrine', roof: 'tile', district: q.district, seed: rng.int(0, 1e9), mural: false, waterDoor: false, sunken: false, tower: false };
+      if (rng.chance(0.5)) P.addBuilding(sh);
+      else statue();
+    } else {
       for (let k = trng.int(4, 8), tries = 0; k > 0 && tries < 30; tries++) {
         const t = trng.range(0, TAU);
         const r = trng.range(0, r0 * 0.55);
@@ -1787,6 +1839,15 @@ function hamletBank(site: TownSite, side: 1 | -1): BankLayout {
     if (!P.fits(obbOf(b), 1.5, 1.5)) continue;
     P.addBuilding(b);
     yard(b);
+  }
+  // a shrine by the bank track near the landing
+  for (let k = 0; k < 24; k++) {
+    const a = B.dock.a + (k % 2 ? -1 : 1) * (9 + k * 2.5);
+    const sh: Building = { ...UNDRESSED, a, c: bankC(a) + 1.4 + 2.2, w: 3, d: 3, rot: 0, floors: 1, kind: 'shrine', roof: 'tile', district: 'residential', seed: rng.int(0, 1e9), mural: false, waterDoor: false, sunken: false, tower: false };
+    if (P.fits(obbOf(sh), 0.5, 0.3)) {
+      P.addBuilding(sh);
+      break;
+    }
   }
   B.buildings.push({ ...UNDRESSED, a: ba, c: 2, w: 8, d: 9, rot: 0, floors: 1, kind: 'boathouse', roof: 'thatch', district: 'waterfront', seed: rng.int(0, 1e9), mural: false, waterDoor: true, sunken: false, tower: false, wet: true });
 
