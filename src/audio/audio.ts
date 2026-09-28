@@ -47,6 +47,10 @@ export interface AudioState {
   townSinging: number;
   /** 0..1 (hamlet .. river city). */
   townSize: number;
+  /** 0..1 a group of townsfolk close by: their murmur (and the odd argument) is heard only then. */
+  crowd: number;
+  /** -1..1 which side that group is on. */
+  crowdPan: number;
   /** On a river barge: crew work songs. */
   onBarge: boolean;
   /** 0..1 (0 = midnight, 0.5 = noon). */
@@ -131,6 +135,8 @@ export class AudioEngine {
     speed: 0,
     townSinging: 0,
     townSize: 0,
+    crowd: 0,
+    crowdPan: 0,
     onBarge: false,
     timeOfDay: 0.5,
     paused: false,
@@ -228,7 +234,7 @@ export class AudioEngine {
       // recorded music where there is some; the sung songs where there isn't
       g.town.songs = !g.music.has('village');
       g.barge.songs = !g.music.has('barge');
-      g.town.update(now, step, ctl, st.townSinging, st.townSize);
+      g.town.update(now, step, ctl, st.townSinging, st.townSize, st.crowd, st.crowdPan);
       g.barge.update(now, step, ctl, st.onBarge, st.waterSpeed);
       if (ctl) g.music.update(now, st.music, st.inTown, st.timeOfDay, st.paused, st.underwater);
     } catch (e) {
@@ -445,6 +451,8 @@ export class AudioEngine {
     st.speed = clamp(Math.abs(fin(o.speed)), 0, 2000);
     st.townSinging = clamp01(fin(o.townSinging));
     st.townSize = clamp01(fin(o.townSize));
+    st.crowd = clamp01(fin(o.crowd));
+    st.crowdPan = clamp(fin(o.crowdPan), -1, 1);
     st.onBarge = !!o.onBarge;
     st.timeOfDay = ((fin(o.timeOfDay, 0.5) % 1) + 1) % 1;
     st.paused = !!o.paused;

@@ -5,9 +5,11 @@
 //    chorus doublers (unison and octave oscillators inside each voice) more
 //    often, so the sound fills out from a lone singer to a small choir.
 //  Crowd: three voiced "talkers" babbling syllables with speech-like pitch,
-//    over a blurred "aah" hum of many voices.
-//  Arguments: very occasionally a shouting match flares up (Quinlans are loud
-//    and quick to anger): two voices trading short, falling shouts.
+//    over a blurred "aah" hum of many voices, heard only near a group of
+//    townsfolk and from the side it stands on.
+//  Arguments: very occasionally a shouting match flares up in a group
+//    (Quinlans are loud and quick to anger): two voices trading short,
+//    falling shouts.
 // Everything passes a distance low-pass and a reverb send that grows as the
 // town recedes, so far-off singing drifts in soft and roomy. The whole graph
 // is built when a town comes within earshot and released when it fades out.
@@ -38,6 +40,7 @@ interface Built {
   tone: SmoothParam;
   murmur: SmoothParam;
   hum: SmoothParam;
+  pan: SmoothParam;
   shoutBus: GainNode;
 }
 
@@ -71,7 +74,8 @@ export class TownLayer {
     this.wet = new SmoothParam(wet.gain, 0.5);
   }
 
-  update(now: number, dt: number, ctl: boolean, near: number, size: number): void {
+  /** near: 0..1 to the town; group: 0..1 townsfolk gathered close by, on side `pan`. */
+  update(now: number, dt: number, ctl: boolean, near: number, size: number, group: number, pan: number): void {
     if (near > 0.003) {
       this.quietFor = 0;
       if (!this.b) this.build(now);
@@ -80,17 +84,19 @@ export class TownLayer {
     if (!b) return;
     this.size = size;
     if (ctl) {
-      this.level.set(Math.pow(near, 1.4) * (0.55 + 0.45 * size), now);
-      this.wet.set(0.3 + 0.6 * (1 - near), now);
-      b.tone.set(expLerp(1000, 7000, Math.pow(near, 0.8)), now);
-      // chatter only carries when close; singing carries far
-      b.murmur.set(Math.pow(near, 1.6) * (0.3 + 0.7 * size) * LVL.murmur, now);
-      b.hum.set(Math.pow(near, 1.2) * (0.25 + 0.75 * size) * LVL.hum, now);
+      const close = Math.max(near, group);
+      this.level.set(Math.max(Math.pow(near, 1.4) * (0.55 + 0.45 * size), Math.min(1, group * 1.5)), now);
+      this.wet.set(0.3 + 0.6 * (1 - close), now);
+      b.tone.set(expLerp(1000, 7000, Math.pow(close, 0.8)), now);
+      // chatter only from a group close by; singing carries far
+      b.murmur.set(Math.pow(group, 1.1) * (0.7 + 0.3 * size) * LVL.murmur, now);
+      b.hum.set(Math.pow(group, 1.5) * (0.4 + 0.6 * size) * LVL.hum, now);
+      b.pan.set(pan * 0.7, now);
     }
     if (this.songs) this.scheduleSong(now, b);
     else this.song = null;
     this.scheduleTalk(now, b);
-    this.scheduleShouts(now, near, b);
+    this.scheduleShouts(now, group, b);
   }
 
   private build(now: number): void {
@@ -100,9 +106,12 @@ export class TownLayer {
     dist.connect(this.out);
     const songBus = gn(ctx, LVL.song);
     songBus.connect(dist);
+    // the crowd (chatter, hum, arguments) sits on the side its group stands
+    const crowdPan = ctx.createStereoPanner();
+    crowdPan.connect(dist);
     const shoutBus = gn(ctx, 1);
-    shoutBus.connect(dist);
-    nodes.push(dist, songBus, shoutBus);
+    shoutBus.connect(crowdPan);
+    nodes.push(dist, songBus, crowdPan, shoutBus);
     // the duet: an upper and a lower line, each able to swell into a chorus
     const voices = [
       new FormantVoice(ctx, songBus, this.wave, {
@@ -124,7 +133,7 @@ export class TownLayer {
     ];
     // crowd murmur: voiced talkers through two formants each
     const murmurG = gn(ctx);
-    murmurG.connect(dist);
+    murmurG.connect(crowdPan);
     nodes.push(murmurG);
     const talkers: Talker[] = [];
     for (let i = 0; i < 3; i++) {
@@ -156,7 +165,7 @@ export class TownLayer {
     src.connect(h2);
     h1.connect(humG);
     h2.connect(humG);
-    humG.connect(dist);
+    humG.connect(crowdPan);
     nodes.push(src, h1, h2, humG);
     this.b = {
       nodes,
@@ -165,6 +174,7 @@ export class TownLayer {
       tone: new SmoothParam(dist.frequency, 0.3, 0.01),
       murmur: new SmoothParam(murmurG.gain, 0.4),
       hum: new SmoothParam(humG.gain, 0.4),
+      pan: new SmoothParam(crowdPan.pan, 0.3),
       shoutBus,
     };
     this.song = null;
@@ -230,8 +240,8 @@ export class TownLayer {
     }
   }
 
-  private scheduleShouts(now: number, near: number, b: Built): void {
-    const rate = near > 0.2 ? (near * (0.3 + 0.7 * this.size)) / 100 : 0;
+  private scheduleShouts(now: number, group: number, b: Built): void {
+    const rate = group > 0.3 ? (group * (0.3 + 0.7 * this.size)) / 100 : 0;
     if (rate <= 0) {
       this.nextShout = Math.max(this.nextShout, now + 20);
       return;

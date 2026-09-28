@@ -105,6 +105,11 @@ interface TierSpec {
   dist: number;
 }
 
+/** Townsfolk within this distance (m) of the camera make up a group you can hear murmuring. */
+const GROUP_R = 16;
+/** How much each activity adds to a group's murmur: talkers most, swimmers hardly. */
+const GROUP_W: Partial<Record<Act, number>> = { chat: 1.6, argue: 1.6, greet: 1.6, stall: 1.2, sing: 1, swim: 0.3, dive: 0.3 };
+
 export class TownLife {
   readonly group = new Group();
   /** Nearest first. */
@@ -116,6 +121,13 @@ export class TownLife {
   singing = 0;
   /** Crowd density near the camera (0..1). */
   crowd = 0;
+  /**
+   * A group gathered close to the camera (0..1): townsfolk within GROUP_R,
+   * nearer ones and talkers counting most. A lone passer-by doesn't count.
+   */
+  gathering = 0;
+  /** Where that group is from the camera (world s, z offset in metres). */
+  readonly gatheringAt = { s: 0, z: 0 };
   stats = { active: 0, drawn: 0 };
   /** Called when a diver hits the water (world s, z). */
   onSplash: ((s: number, z: number) => void) | null = null;
@@ -481,6 +493,9 @@ export class TownLife {
     for (const t of tiers) t.count = 0;
     let singers = 0;
     let crowd = 0;
+    let gw = 0;
+    let gs = 0;
+    let gz = 0;
     let active = 0;
     for (const pop of this.pops.values()) {
       const { site, town } = pop;
@@ -507,6 +522,12 @@ export class TownLife {
         if (d < 70) {
           if (n.act === 'sing') singers++;
           crowd++;
+        }
+        if (d < GROUP_R) {
+          const w = (1 - d / GROUP_R) ** 2 * (GROUP_W[n.act] ?? 0.8);
+          gw += w;
+          gs += w * (n.x - cx);
+          gz += w * (n.z - cz);
         }
         if (d > RENDER_DIST) continue;
         let tier: Tier | null = null;
@@ -545,6 +566,11 @@ export class TownLife {
     }
     this.singing = damp(this.singing, clamp(singers / 6, 0, 1), 1.5, dt);
     this.crowd = damp(this.crowd, clamp(crowd / 25, 0, 1), 1.5, dt);
+    this.gathering = damp(this.gathering, clamp((gw - 0.6) / 2.4, 0, 1), 2, dt);
+    if (gw > 0) {
+      this.gatheringAt.s = gs / gw;
+      this.gatheringAt.z = gz / gw;
+    }
     this.stats.active = active;
     this.stats.drawn = drawn;
   }

@@ -4,8 +4,9 @@
 // birds. Tavern tracks wait for the day buildings can be entered (the game
 // doesn't cue them yet). Two <audio> players stream the tracks into
 // the WebAudio graph, so the volume setting, menus and water muffle them like
-// the rest of the sound, and they crossfade as the scene changes. A track
-// left off for a moment (a look at the map) picks up where it was.
+// the rest of the sound, and they crossfade as the scene changes (the start
+// sequence's music into the world's as the sequence ends). A track left off
+// for a moment (a look at the map) picks up where it was.
 
 import files from 'virtual:music-files';
 import { bq, gn } from './synth';
@@ -102,6 +103,8 @@ export class MusicPlayer {
   private last: Track | null = null;
   private retryAt = 0;
   private hidden = false;
+  /** Fade-in (s) for the next track to start, when it takes over from another. */
+  private fadeIn = 0;
 
   constructor(
     private readonly ctx: AudioContext,
@@ -192,16 +195,16 @@ export class MusicPlayer {
             : this.inTown
               ? 'village'
               : 'fields';
-    // the start sequence plays on into the world until it ends
-    if (cue === 'world' && this.scene === 'start' && this.active) want = 'start';
     if (want && !this.has(want)) want = null;
 
     if (want !== this.scene) {
       const from = this.scene;
       this.scene = want;
-      this.fadeOut(now, from === 'map' || want === 'map' ? 1.2 : 3);
-      // a breath of quiet before the fields music, unless just back from the map
-      if (want === 'fields' && from && from !== 'map') this.restUntil.fields = Math.max(this.restUntil.fields, now + rand(6, 12));
+      // the start sequence's music flows straight into the world's; the map switches quickly
+      this.fadeOut(now, from === 'map' || want === 'map' ? 1.2 : from === 'start' ? 5 : 3);
+      this.fadeIn = from === 'start' ? 4 : 0;
+      // a breath of quiet before the fields music, unless coming from the start or the map
+      if (want === 'fields' && from && from !== 'map' && from !== 'start') this.restUntil.fields = Math.max(this.restUntil.fields, now + rand(6, 12));
     } else if (this.active?.track && want && !this.suits(this.active.track)) {
       // dusk or dawn: over to the other time of day's track, slowly
       this.fadeOut(now, 6);
@@ -256,7 +259,8 @@ export class MusicPlayer {
     s.stopAt = Infinity;
     g.cancelScheduledValues(now);
     g.setValueAtTime(from, now);
-    g.linearRampToValueAtTime(1, now + (t.pos > 0 ? 2 : 1.2));
+    g.linearRampToValueAtTime(1, now + (this.fadeIn || (t.pos > 0 ? 2 : 1.2)));
+    this.fadeIn = 0;
     this.active = s;
     this.last = t;
     s.el.play().catch((e: unknown) => {

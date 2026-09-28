@@ -26,6 +26,8 @@ export class AudioBridge {
     speed: 0,
     townSinging: 0,
     townSize: 0,
+    crowd: 0,
+    crowdPan: 0,
     onBarge: false,
     timeOfDay: 0.5,
     paused: false,
@@ -127,6 +129,11 @@ export class AudioBridge {
     st.speed = app.cameraOverride ? 0 : p.speed;
     st.townSinging = damp(st.townSinging, this.target.town, 1.2, dt);
     st.townSize = this.target.size;
+    // a group of townsfolk close by, and which side it's on
+    st.crowd = app.life.gathering;
+    const ga = app.life.gatheringAt;
+    const gd = Math.hypot(ga.s, ga.z);
+    st.crowdPan = damp(st.crowdPan, gd > 1 ? (ga.s * Math.cos(cam.yaw) - ga.z * Math.sin(cam.yaw)) / gd : 0, 3, dt);
     st.onBarge = opts.onBarge;
     st.timeOfDay = app.timeOfDay;
     st.paused = opts.paused;

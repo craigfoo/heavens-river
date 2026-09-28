@@ -5,7 +5,7 @@ The game plays the audio files in this folder, choosing each one by its name
 
 | In the name | Plays |
 |-------------|-------|
-| `Start` | the arrival sequence, carrying on into the world until it ends |
+| `Start` | the arrival sequence, fading into the scene's music as it ends |
 | `Map` | while the map is open (and on the trip it starts) |
 | `Village`, `Town`, `City` | in towns, hamlets and cities |
 | `Tavern` | kept for inside taverns, once buildings can be entered (not played yet) |
