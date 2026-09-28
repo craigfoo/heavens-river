@@ -8,7 +8,7 @@ The game plays the audio files in this folder, choosing each one by its name
 | `Start` | the arrival sequence, carrying on into the world until it ends |
 | `Map` | while the map is open (and on the trip it starts) |
 | `Village`, `Town`, `City` | in towns, hamlets and cities |
-| `Tavern` | in towns at night |
+| `Tavern` | kept for inside taverns, once buildings can be entered (not played yet) |
 | `Barge` | aboard a barge |
 | `Fields` | out in the country, with a spell of quiet between tracks |
 

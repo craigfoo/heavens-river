@@ -59,7 +59,7 @@ export interface AudioState {
   inTown: number;
 }
 
-const CUES: readonly MusicCue[] = ['intro', 'map', 'barge', 'world', 'hold'];
+const CUES: readonly MusicCue[] = ['intro', 'map', 'barge', 'world', 'hold', 'tavern'];
 
 /** Max concurrent transient voices. */
 const MAX_VOICES = 96;

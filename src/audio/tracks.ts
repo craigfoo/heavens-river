@@ -1,7 +1,8 @@
 // Recorded music: the tracks in public/music, each placed by what its file
-// name says (see classify): the start sequence, the map, a barge, a town (a
-// tavern tune by night) or the open fields, where a track is followed by a
-// spell of just wind and birds. Two <audio> players stream the tracks into
+// name says (see classify): the start sequence, the map, a barge, a town or
+// the open fields, where a track is followed by a spell of just wind and
+// birds. Tavern tracks wait for the day buildings can be entered (the game
+// doesn't cue them yet). Two <audio> players stream the tracks into
 // the WebAudio graph, so the volume setting, menus and water muffle them like
 // the rest of the sound, and they crossfade as the scene changes. A track
 // left off for a moment (a look at the map) picks up where it was.
@@ -10,10 +11,11 @@ import files from 'virtual:music-files';
 import { bq, gn } from './synth';
 import { SmoothParam, clamp01, expLerp, rand } from './util';
 
-export type MusicScene = 'start' | 'map' | 'barge' | 'village' | 'fields';
+/** 'tavern': inside a tavern, once buildings can be entered. */
+export type MusicScene = 'start' | 'map' | 'barge' | 'village' | 'fields' | 'tavern';
 
 /** What the game is doing, as far as the music cares ('hold': a cutscene, keep playing). */
-export type MusicCue = 'intro' | 'map' | 'barge' | 'world' | 'hold';
+export type MusicCue = 'intro' | 'map' | 'barge' | 'world' | 'hold' | 'tavern';
 
 interface Track {
   url: string;
@@ -54,7 +56,7 @@ export function classify(file: string): Pick<Track, 'scene' | 'night'> | null {
   if (word('map')) return { scene: 'map', night: null };
   if (/barge|boat/.test(n)) return { scene: 'barge', night };
   if (/field/.test(n)) return { scene: 'fields', night };
-  if (/tavern/.test(n)) return { scene: 'village', night: true };
+  if (/tavern/.test(n)) return { scene: 'tavern', night };
   if (/village|town|city/.test(n)) return { scene: 'village', night };
   return null;
 }
@@ -94,7 +96,7 @@ export class MusicPlayer {
   private volume = 0.7;
   /** The scene the music is in (playing, or resting between fields tracks). */
   private scene: MusicScene | null = null;
-  private readonly restUntil: Record<MusicScene, number> = { start: 0, map: 0, barge: 0, village: 0, fields: 0 };
+  private readonly restUntil: Record<MusicScene, number> = { start: 0, map: 0, barge: 0, village: 0, fields: 0, tavern: 0 };
   private inTown = false;
   private night = false;
   private last: Track | null = null;
@@ -181,7 +183,15 @@ export class MusicPlayer {
     }
 
     let want: MusicScene | null =
-      cue === 'hold' ? this.scene : cue === 'intro' ? 'start' : cue === 'map' ? 'map' : cue === 'barge' ? 'barge' : this.inTown ? 'village' : 'fields';
+      cue === 'hold'
+        ? this.scene
+        : cue === 'intro'
+          ? 'start'
+          : cue === 'map' || cue === 'barge' || cue === 'tavern'
+            ? cue
+            : this.inTown
+              ? 'village'
+              : 'fields';
     // the start sequence plays on into the world until it ends
     if (cue === 'world' && this.scene === 'start' && this.active) want = 'start';
     if (want && !this.has(want)) want = null;
