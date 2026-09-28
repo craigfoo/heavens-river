@@ -2,7 +2,8 @@
 // 7.4). Every sound is synthesized with WebAudio from oscillators, a few
 // shared looping noise buffers and filters, except the music: recorded tracks
 // from public/music (tracks.ts) play by scene, and the sung town and barge
-// songs rest wherever a track takes their place.
+// songs rest wherever a track takes their place. The world bus falls silent
+// through the arrival sequence, which is set in space.
 //
 //   ambience beds (river, wind, wildlife, town, barge) ─ stall ─┐
 //   world one-shots (steps, Anek's bird, splashes), reverb ─────┴─ world
@@ -82,6 +83,8 @@ interface Graph {
   level: SmoothParam;
   duck: SmoothParam;
   stall: SmoothParam;
+  /** The world outside (ambience, birds, world one-shots): silent during the arrival sequence. */
+  world: SmoothParam;
   lowpass: SmoothParam;
   air: SmoothParam;
   river: RiverLayer;
@@ -118,6 +121,7 @@ export class AudioEngine {
   private waterVolume = 1;
   private musicVolume = 0.7;
   private muted = false;
+  private inIntro = false;
   private disposed = false;
   private ctlAcc = 0;
   private lastNow = 0;
@@ -219,6 +223,14 @@ export class AudioEngine {
         this.ctlAcc = 0;
         g.duck.set(st.paused ? DUCK : 1, now);
         g.stall.set(1, now);
+        // the arrival sequence is out in space and the station: no birds, wind or
+        // water in it (cut at once); the world fades in as the sequence ends
+        const intro = st.music === 'intro';
+        if (intro !== this.inIntro) {
+          this.inIntro = intro;
+          if (intro) g.world.jump(0, now);
+          else g.world.set(1, now, 0.6);
+        }
         g.lowpass.set(expLerp(20000, 500, st.underwater), now);
         g.air.set(1 - 0.5 * st.underwater, now);
       }
@@ -406,6 +418,7 @@ export class AudioEngine {
       level: new SmoothParam(master.gain, 0.05),
       duck: new SmoothParam(duck.gain, 0.12),
       stall: new SmoothParam(amb.gain, 0.3),
+      world: new SmoothParam(world.gain, 0.5),
       lowpass: new SmoothParam(lowpass.frequency, 0.05, 0.01),
       air: new SmoothParam(air.gain, 0.08),
       river,
