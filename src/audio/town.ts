@@ -52,6 +52,8 @@ export class TownLayer {
   private nextShout = 0;
   private quietFor = 0;
   private size = 0;
+  /** Sing (off while recorded village music plays instead). */
+  songs = true;
 
   constructor(
     private readonly k: Kit,
@@ -85,7 +87,8 @@ export class TownLayer {
       b.murmur.set(Math.pow(near, 1.6) * (0.3 + 0.7 * size) * LVL.murmur, now);
       b.hum.set(Math.pow(near, 1.2) * (0.25 + 0.75 * size) * LVL.hum, now);
     }
-    this.scheduleSong(now, b);
+    if (this.songs) this.scheduleSong(now, b);
+    else this.song = null;
     this.scheduleTalk(now, b);
     this.scheduleShouts(now, near, b);
   }

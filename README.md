@@ -350,7 +350,7 @@ For instant travel.
 
 ## 9. Audio
 - River ambience driven by distance to nearest water.
-- Distant Quinlan singing in towns (two-melody harmonies).
+- Recorded music by scene (`public/music/`, placed by file name): the start sequence, the map, barges, villages (a tavern tune by night) and the open fields, crossfading as you go. The synthesized two-melody town singing and barge work songs remain as fallbacks.
 - Underwater low-pass filter.
 - Wind picks up at altitude near barriers.
 - Spin Transfer: rising mechanical whine, then silence on dock.

@@ -1,4 +1,37 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
+
+/**
+ * Lists the recorded music in public/music for the game (import
+ * 'virtual:music-files'): drop audio files in that folder and the game finds
+ * them by name (see src/audio/tracks.ts). The dev server reloads when files
+ * come or go.
+ */
+function musicFiles(): Plugin {
+  const id = 'virtual:music-files';
+  let dir = '';
+  const list = () => (existsSync(dir) ? readdirSync(dir).filter((f) => /\.(mp3|ogg|oga|opus|m4a|aac|wav|flac)$/i.test(f)).sort() : []);
+  return {
+    name: 'music-files',
+    configResolved(c) {
+      dir = join(c.publicDir, 'music');
+    },
+    resolveId: (s) => (s === id ? '\0' + id : null),
+    load: (s) => (s === '\0' + id ? `export default ${JSON.stringify(list())};` : null),
+    configureServer(server) {
+      server.watcher.add(dir);
+      const changed = (f: string) => {
+        if (!f.startsWith(dir)) return;
+        const m = server.moduleGraph.getModuleById('\0' + id);
+        if (m) server.moduleGraph.invalidateModule(m);
+        server.ws.send({ type: 'full-reload' });
+      };
+      server.watcher.on('add', changed);
+      server.watcher.on('unlink', changed);
+    },
+  };
+}
 
 /**
  * N8AO (ambient occlusion) turns a logarithmic depth value back into a
@@ -61,7 +94,7 @@ function n8aoLogDepth(): Plugin {
 
 export default defineConfig({
   base: './',
-  plugins: [n8aoLogDepth()],
+  plugins: [n8aoLogDepth(), musicFiles()],
   // served unbundled in development so the patch above applies
   optimizeDeps: { exclude: ['n8ao'] },
   worker: { format: 'es' },

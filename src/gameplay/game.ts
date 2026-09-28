@@ -601,6 +601,9 @@ export class Game {
       case 'waterVolume':
         this.audio.setWaterVolume(s.waterVolume);
         break;
+      case 'musicVolume':
+        this.audio.setMusicVolume(s.musicVolume);
+        break;
       case 'visionMode':
         if (this.visionOn !== 'off') this.setVision(s.visionMode);
         break;
@@ -774,9 +777,12 @@ export class Game {
     this.scrub = damp(this.scrub, scrubbing ? (inp.isDown('ShiftLeft') ? -1 : 1) : 0, 6, dt);
     if (Math.abs(this.scrub) > 0.01) app.timeOfDay = mod(app.timeOfDay + this.scrub * dt * 0.06, 1);
     for (const f of this.onUpdate) f(dt);
+    // the music follows the scene; photo mode keeps the scene it was entered from
+    const scene = this.state === 'photo' ? this.photoReturn : this.state;
     this.audio.update(dt, {
       paused: this.state === 'menu' || this.state === 'map' || this.state === 'journal',
       onBarge: this.state === 'barge',
+      music: scene === 'intro' ? 'intro' : scene === 'map' ? 'map' : scene === 'barge' ? 'barge' : scene === 'cutscene' || scene === 'boot' ? 'hold' : 'world',
     });
     this.lookHint.style.opacity = this.state === 'explore' && !app.input.locked && !app.input.touchActive && !app.testMode ? '1' : '0';
     this.steerEyes();

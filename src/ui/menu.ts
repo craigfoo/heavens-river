@@ -46,6 +46,7 @@ const GROUPS: { title: string; opts: Opt[] }[] = [
       { kind: 'select', key: 'visionMode', label: 'First Quinlan view (V)', options: [['panorama', 'Panorama (270°)'], ['split', 'Independent eyes']] },
       { kind: 'range', key: 'volume', label: 'Volume', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { kind: 'range', key: 'waterVolume', label: 'Water sounds', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
+      { kind: 'range', key: 'musicVolume', label: 'Music', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
       { kind: 'toggle', key: 'muted', label: 'Mute' },
       { kind: 'toggle', key: 'showDebug', label: 'Show performance stats' },
     ],

@@ -1,8 +1,10 @@
 // Feeds the procedural audio engine from the world: water, wind, underwater,
-// towns, barges, time of day, plus one-shot events (steps, splashes, dives,
-// discoveries, travel whooshes, Anek's birds, the intro machinery).
+// towns, barges, time of day, what the music should follow, plus one-shot
+// events (steps, splashes, dives, discoveries, travel whooshes, Anek's birds,
+// the intro machinery).
 
 import { AudioEngine, type AudioState } from '../audio/audio';
+import type { MusicCue } from '../audio/tracks';
 import { L } from '../config';
 import { wrapS } from '../coords/cylinder';
 import { clamp, damp, smoothstep } from '../core/math';
@@ -27,8 +29,10 @@ export class AudioBridge {
     onBarge: false,
     timeOfDay: 0.5,
     paused: false,
+    music: 'world',
+    inTown: 0,
   };
-  private target = { water: 0, speed: 0, alt: 0, wind: 0, town: 0, size: 0 };
+  private target = { water: 0, speed: 0, alt: 0, wind: 0, town: 0, size: 0, inTown: 0 };
   private surface: 'grass' | 'stone' | 'wood' | 'water' = 'grass';
 
   constructor(app: App) {
@@ -74,12 +78,17 @@ export class AudioBridge {
     this.engine.setWaterVolume(v);
   }
 
+  /** Recorded music relative to the master volume (0..1). */
+  setMusicVolume(v: number) {
+    this.engine.setMusicVolume(v);
+  }
+
   setVolume(v: number, muted: boolean) {
     this.engine.setMasterVolume(v);
     this.engine.setMuted(muted);
   }
 
-  update(dt: number, opts: { paused: boolean; onBarge: boolean }) {
+  update(dt: number, opts: { paused: boolean; onBarge: boolean; music: MusicCue }) {
     const app = this.app;
     const st = this.state;
     const cam = app.cameraPose();
@@ -101,7 +110,9 @@ export class AudioBridge {
         const r = near.site.radius;
         this.target.town = 1 - smoothstep(r * 0.35, r * 1.25 + 250, near.dist);
         this.target.size = near.site.kind === 'city' ? 1 : near.site.kind === 'town' ? 0.55 : 0.2;
-      } else this.target.town = 0;
+        // the music's idea of being in town: within the town, fading over its outskirts
+        this.target.inTown = 1 - smoothstep(r * 0.8, r * 1.4, near.dist);
+      } else this.target.town = this.target.inTown = 0;
       this.target.town = Math.max(this.target.town, app.life.singing);
       // what the feet are on
       const inTown = o.town > 0.4;
@@ -119,6 +130,8 @@ export class AudioBridge {
     st.onBarge = opts.onBarge;
     st.timeOfDay = app.timeOfDay;
     st.paused = opts.paused;
+    st.music = opts.music;
+    st.inTown = this.target.inTown;
     this.engine.update(st, dt);
   }
 }

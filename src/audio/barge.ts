@@ -114,6 +114,8 @@ export class BargeLayer {
   private quietFor = 0;
   private swell = 0.5;
   private swellTarget = 0.5;
+  /** Work songs (off while recorded barge music plays instead). */
+  songs = true;
 
   constructor(
     private readonly k: Kit,
@@ -149,7 +151,8 @@ export class BargeLayer {
       b.slosh.set((0.5 + 0.5 * this.swell) * (0.6 + 0.4 * clamp(waterSpeed / 2, 0, 1)) * LVL.slosh, now);
     }
     if (!on) return; // let what is scheduled ring out while fading
-    this.scheduleSong(now, b);
+    if (this.songs) this.scheduleSong(now, b);
+    else this.song = null;
     this.scheduleHull(now, b);
   }
 

@@ -1,13 +1,16 @@
 // Procedural audio engine (spec 9, "Life and sound" in 7.1, barge ambience in
-// 7.4). There are no audio files: every sound is synthesized with WebAudio
-// from oscillators, a few shared looping noise buffers and filters.
+// 7.4). Every sound is synthesized with WebAudio from oscillators, a few
+// shared looping noise buffers and filters, except the music: recorded tracks
+// from public/music (tracks.ts) play by scene, and the sung town and barge
+// songs rest wherever a track takes their place.
 //
 //   ambience beds (river, wind, wildlife, town, barge) ─ stall ─┐
 //   world one-shots (steps, Anek's bird, splashes), reverb ─────┴─ world
 //   world ─ underwater low-pass ─ air ─┐
 //   underwater bed (rumble, bubbles) ──┼─ duck (menus) ─┐
 //   direct one-shots (splash, dive) ───┘                ├─ master ─ compressor ─ soft clip ─ out
-//   ui (click, chime, whoosh), intro machines ──────────┘
+//   ui (click, chime, whoosh), intro machines ──────────┤
+//   music (recorded tracks, own ducking and muffling) ──┘
 //
 // The game calls update() every frame with an AudioState. Parameters are
 // smoothed and written at ~30 Hz; musical and random events are scheduled a
@@ -24,6 +27,7 @@ import { NatureLayer } from './nature';
 import { Sfx, type Surface } from './sfx';
 import { bq, gn, makeImpulse, makeNoiseBank, makeVoiceWave, type Kit } from './synth';
 import { TownLayer } from './town';
+import { MusicPlayer, type MusicCue } from './tracks';
 import { SmoothParam, VoicePool, clamp, clamp01, expLerp, fin, smoothstep } from './util';
 
 export interface AudioState {
@@ -49,7 +53,13 @@ export interface AudioState {
   timeOfDay: number;
   /** Menus open: duck everything. */
   paused: boolean;
+  /** What the music should follow (see MusicCue). */
+  music: MusicCue;
+  /** 0..1 how far into a town the listener is (the music's village or fields). */
+  inTown: number;
 }
+
+const CUES: readonly MusicCue[] = ['intro', 'map', 'barge', 'world', 'hold'];
 
 /** Max concurrent transient voices. */
 const MAX_VOICES = 96;
@@ -79,6 +89,7 @@ interface Graph {
   sfx: Sfx;
   spin: SpinTransfer;
   lift: Elevator;
+  music: MusicPlayer;
   /** Output gains of everything the water volume scales. */
   water: SmoothParam[];
   taps: Record<string, AudioNode>;
@@ -101,6 +112,7 @@ export class AudioEngine {
   private g: Graph | null = null;
   private volume = 0.8;
   private waterVolume = 1;
+  private musicVolume = 0.7;
   private muted = false;
   private disposed = false;
   private ctlAcc = 0;
@@ -122,6 +134,8 @@ export class AudioEngine {
     onBarge: false,
     timeOfDay: 0.5,
     paused: false,
+    music: 'world',
+    inTown: 0,
   };
 
   constructor() {}
@@ -145,6 +159,7 @@ export class AudioEngine {
         this.unlock(ctx);
         this.applyVolume();
         this.applyWaterVolume();
+        this.g.music.setVolume(this.musicVolume);
         this.timer = setInterval(() => this.tick(), 250);
         // idle work off the frame path: render barge creaks one at a time
         const idle = () => this.fx((g) => g.barge.prepare() && setTimeout(idle, 120));
@@ -168,6 +183,12 @@ export class AudioEngine {
   setWaterVolume(v: number): void {
     this.waterVolume = clamp01(fin(v, this.waterVolume));
     this.applyWaterVolume();
+  }
+
+  /** Recorded music relative to the master, 0..1. */
+  setMusicVolume(v: number): void {
+    this.musicVolume = clamp01(fin(v, this.musicVolume));
+    this.fx((g) => g.music.setVolume(this.musicVolume));
   }
 
   setMuted(m: boolean): void {
@@ -204,8 +225,12 @@ export class AudioEngine {
       g.wind.update(now, step, ctl, wind);
       g.under.update(now, ctl, st.underwater, st.speed);
       g.nature.update(now, step, ctl, st);
+      // recorded music where there is some; the sung songs where there isn't
+      g.town.songs = !g.music.has('village');
+      g.barge.songs = !g.music.has('barge');
       g.town.update(now, step, ctl, st.townSinging, st.townSize);
       g.barge.update(now, step, ctl, st.onBarge, st.waterSpeed);
+      if (ctl) g.music.update(now, st.music, st.inTown, st.timeOfDay, st.paused, st.underwater);
     } catch (e) {
       this.fail(e);
     }
@@ -277,7 +302,7 @@ export class AudioEngine {
   /**
    * Debug metering: an AnalyserNode tapping a named output, or null before
    * start(). Names: master, river, wind, underwater, birds, night, town,
-   * barge, sfx, direct, ui, machines, reverb.
+   * barge, sfx, direct, ui, machines, reverb, music.
    */
   debugTap(name = 'master'): AnalyserNode | null {
     const g = this.g;
@@ -296,6 +321,11 @@ export class AudioEngine {
     } catch {
       return null;
     }
+  }
+
+  /** What the music is doing (debug), or null before start(). */
+  debugMusic(): ReturnType<MusicPlayer['debug']> | null {
+    return this.g?.music.debug() ?? null;
   }
 
   /** Transient voices currently sounding (debug). */
@@ -362,6 +392,7 @@ export class AudioEngine {
     const sfx = new Sfx(kit, sfxWorld, direct, ui, verbIn, wave);
     const spin = new SpinTransfer(kit, machines);
     const lift = new Elevator(kit, machines);
+    const music = new MusicPlayer(ctx, master);
 
     return {
       ctx,
@@ -380,6 +411,7 @@ export class AudioEngine {
       sfx,
       spin,
       lift,
+      music,
       water: [river.out, under.out, sfx.far].map((n) => new SmoothParam(n.gain, 0.1)),
       taps: {
         master: clip,
@@ -395,6 +427,7 @@ export class AudioEngine {
         ui,
         machines,
         reverb: verbOut,
+        music: music.out,
       },
       analysers: new Map(),
     };
@@ -415,6 +448,8 @@ export class AudioEngine {
     st.onBarge = !!o.onBarge;
     st.timeOfDay = ((fin(o.timeOfDay, 0.5) % 1) + 1) % 1;
     st.paused = !!o.paused;
+    st.music = CUES.includes(o.music as MusicCue) ? (o.music as MusicCue) : 'world';
+    st.inTown = clamp01(fin(o.inTown));
     return st;
   }
 

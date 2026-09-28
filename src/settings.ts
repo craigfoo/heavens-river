@@ -17,6 +17,7 @@ export interface Settings {
   tripSeconds: number; // barge trip length (60..180)
   volume: number;
   waterVolume: number; // rivers, streams, underwater and other people's splashes, relative to volume
+  musicVolume: number; // recorded music, relative to volume
   muted: boolean;
   visionMode: 'panorama' | 'split';
   showDebug: boolean;
@@ -42,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tripSeconds: 120,
   volume: 0.7,
   waterVolume: 1,
+  musicVolume: 0.7,
   muted: false,
   visionMode: 'panorama',
   showDebug: false,
